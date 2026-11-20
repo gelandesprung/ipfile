@@ -15,7 +15,7 @@
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="飞鸽 P2P"
+        android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.IPFile"
@@ -25,7 +25,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="飞鸽 P2P"
+            android:label="@string/app_name"
             android:theme="@style/Theme.IPFile">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

@@ -186,7 +186,7 @@ fun AppScreen() {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("飞鸽 P2P", fontWeight = FontWeight.Bold) },
+                title = { Text("飞书", fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = { showLogs = true }) {
                         Icon(Icons.Default.Article, "日志")
@@ -464,7 +464,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     val ver = try {
                         ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
                     } catch (e: Exception) { "?" }
-                    Text("飞鸽 P2P · v$ver", fontSize = 12.sp, color = C.Gray)
+                    Text("飞书 · v$ver", fontSize = 12.sp, color = C.Gray)
                     Text("build 2026-11-20-e · 接收需确认", fontSize = 11.sp, color = C.Gray)
                 }
             }

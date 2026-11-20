@@ -80,6 +80,7 @@ public sealed class MainForm : Form
     private void BuildUi()
     {
         Text = "飞鸽 P2P · 局域网互传";
+        Icon = LoadAppIcon(new Size(48, 48));
         // 下面的尺寸都是 96 DPI 的设计值，AutoScaleMode.None + 手工 Scale 会整体放大
         Size = new Size(920, 660);
         MinimumSize = new Size(760, 560);
@@ -765,7 +766,8 @@ public sealed class MainForm : Form
     private void BuildTray()
     {
         _tray.Text = $"飞鸽 P2P · {_config.DeviceName}";
-        _tray.Icon = BuildTrayIcon();
+        // 托盘按系统小图标尺寸取帧，150%/200% 缩放下也不会糊
+        _tray.Icon = LoadAppIcon(SystemInformation.SmallIconSize) ?? SystemIcons.Application;
         _tray.Visible = true;
         _tray.DoubleClick += (_, _) => ShowFromTray();
 
@@ -800,36 +802,20 @@ public sealed class MainForm : Form
         Close();
     }
 
-    /// <summary>程序没有自带 .ico，运行时画一个：蓝底白字的小图标。</summary>
-    private static Icon BuildTrayIcon()
+    /// <summary>从内嵌的 app.ico 里取最贴近目标尺寸的一帧；标题栏、托盘、任务栏共用同一份图标。</summary>
+    private static Icon? LoadAppIcon(Size size)
     {
-        using var bmp = new Bitmap(32, 32);
-        using (var g = Graphics.FromImage(bmp))
-        {
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-            using var bg = new SolidBrush(Color.FromArgb(30, 111, 217));
-            g.FillEllipse(bg, 0, 0, 31, 31);
-            using var fg = new SolidBrush(Color.White);
-            using var font = new Font("微软雅黑", 17F, FontStyle.Bold, GraphicsUnit.Pixel);
-            using var fmt = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            g.DrawString("飞", font, fg, new RectangleF(0, 1, 31, 31), fmt);
-        }
-
-        var handle = bmp.GetHicon();
         try
         {
-            using var tmp = Icon.FromHandle(handle);
-            return (Icon)tmp.Clone(); // 克隆后就不依赖这个句柄，可以安全销毁
+            using var stream = typeof(MainForm).Assembly.GetManifestResourceStream("app.ico");
+            return stream == null ? null : new Icon(stream, size);
         }
-        finally
+        catch (Exception ex)
         {
-            DestroyIcon(handle);
+            System.Diagnostics.Debug.WriteLine($"加载图标失败：{ex.Message}");
+            return null;
         }
     }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool DestroyIcon(IntPtr handle);
 
     private void AppendLog(string msg, Color color)
     {

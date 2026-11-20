@@ -9,6 +9,7 @@
 
 # Root build artifacts (本地发布产物，不入版本库)
 /FeigeP2P.exe
+/飞书.apk
 /FeigeP2P-android.apk
 /crash.log
 

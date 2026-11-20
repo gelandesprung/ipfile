@@ -6,6 +6,13 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- exe 在资源管理器/任务栏显示的图标 -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 运行时读同一份 ico：窗口标题栏与托盘 -->
+    <EmbeddedResource Include="app.ico" LogicalName="app.ico" />
+  </ItemGroup>
 
 </Project>

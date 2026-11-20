@@ -128,7 +128,7 @@ class ReceiveService : Service() {
         val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), pendingFlags())
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("飞鸽 P2P")
+            .setContentTitle("飞书")
             .setContentText(text)
             .setContentIntent(pi)
             .setOngoing(true)

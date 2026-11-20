@@ -28,8 +28,9 @@
 .
 ├── shared/PROTOCOL.md      两端共用通信协议 v1.0
 ├── UI-DESIGN.md            界面设计说明
-├── pc/                     PC 端 C# 工程（FeigeP2P.csproj）
+├── pc/                     PC 端 C# 工程（FeigeP2P.csproj），app.ico 为程序图标
 ├── android/                Android 工程（Gradle / Kotlin）
+├── tools/icongen/          由「飞」字轮廓生成 ico 与 Android vector 的小工具
 └── test/FeigeTest/         协议闭环测试（C#）
 ```
 
@@ -39,8 +40,17 @@
 
 | 文件 | 说明 |
 |---|---|
-| `FeigeP2P.exe` | PC 端单文件程序，约 220 KB，双击即可运行（需 .NET 8 桌面运行时，本机已具备） |
-| `FeigeP2P-android.apk` | Android 安装包，约 16 MB，支持 Android 7.0+ |
+| `FeigeP2P.exe` | PC 端单文件程序，约 480 KB，双击即可运行（需 .NET 8 桌面运行时，本机已具备） |
+| `飞书.apk` | Android 安装包，约 16 MB，支持 Android 7.0+；装好后在手机上显示为「飞书」 |
+
+两端图标一致：蓝色圆底 + 白色「飞」，字形取自微软雅黑粗体的真实轮廓。PC 的 `pc/app.ico` 与 Android 的 `ic_launcher_foreground.xml` 都由 `tools/icongen` 从同一份轮廓生成，改颜色或大小可重新跑一遍：
+
+```bash
+cd tools/icongen
+dotnet run -c Release -- ../../pc/app.ico ../pathdata.txt   # 换 logo 色只需改 IconGen.Blue
+```
+
+Android 端安装后名称为「飞书」，包名仍是 `com.gelandesprung.ipfile`。
 
 这两个文件由构建脚本生成，已加入 `.gitignore`（二进制不进版本库）。
 
@@ -53,7 +63,7 @@ dotnet publish pc/FeigeP2P.csproj -c Release -r win-x64 \
 
 # Android 端 → 复制到根目录
 cd android && ./gradlew assembleDebug
-cp app/build/outputs/apk/debug/app-debug.apk ../FeigeP2P-android.apk
+cp app/build/outputs/apk/debug/app-debug.apk ../飞书.apk
 ```
 
 ---
