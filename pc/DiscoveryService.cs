@@ -20,6 +20,7 @@ public sealed class DiscoveryService : IDisposable
 
     public IReadOnlyDictionary<string, Peer> Peers => _peers;
     public event Action<Peer, bool>? PeerChanged; // (peer, isAdded)
+    public event Action<string>? Diag; // 诊断日志（调试发现问题时用）
 
     public DiscoveryService(AppConfig config)
     {
@@ -80,9 +81,11 @@ public sealed class DiscoveryService : IDisposable
                 var result = await _udp!.ReceiveAsync(_cts.Token);
                 var text = Encoding.UTF8.GetString(result.Buffer);
                 var pkt = Protocol.ParseDiscovery(text);
-                if (pkt == null) continue;
+                if (pkt == null) { Diag?.Invoke($"丢弃非法包：{text.Trim()}"); continue; }
                 var peer = pkt.Peer;
                 if (peer.Ip == _localIp) continue; // 忽略自己（含本机多实例）
+
+                Diag?.Invoke($"收到{(pkt.Bye ? "BYE" : "广播")}：{peer.Name} {peer.Ip}:{peer.TcpPort}");
 
                 if (pkt.Bye)
                 {

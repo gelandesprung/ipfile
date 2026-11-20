@@ -24,6 +24,7 @@ public sealed class MainForm : Form
     private readonly ToolStripMenuItem _menuSend;
     private readonly ToolStripMenuItem _menuCopyIp;
     private readonly ToolStripMenuItem _menuRefresh;
+    private readonly ToolStripMenuItem _menuManual;
 
     private Peer? _menuTarget;
     private string _lastLog = "";
@@ -38,6 +39,7 @@ public sealed class MainForm : Form
         _menuSend = new ToolStripMenuItem("发送文件…");
         _menuCopyIp = new ToolStripMenuItem("复制 IP 地址");
         _menuRefresh = new ToolStripMenuItem("刷新设备");
+        _menuManual = new ToolStripMenuItem("手动输入 IP 直连…");
 
         BuildUi();
         WireEvents();
@@ -45,7 +47,7 @@ public sealed class MainForm : Form
         _transfer.Start();
         _discovery.Start();
         AppendLog($"已启动 · 本机 {_config.DeviceName} ({_discovery.LocalIp}:{_config.TcpPort})", Color.FromArgb(25, 100, 180));
-        AppendLog("右键在线设备即可发送文件；文件保存在程序目录 received/", Color.Gray);
+        AppendLog("右键在线设备发送文件；若发现不到对方，可用「手动输入 IP 直连」", Color.Gray);
     }
 
     // ---------------- UI 构建 ----------------
@@ -59,19 +61,16 @@ public sealed class MainForm : Form
         BackColor = Color.FromArgb(245, 246, 248);
         Font = new Font("微软雅黑", 9F);
 
-        // 根容器：3 行（顶部信息 / 主体 / 底部进度），用百分比+绝对值，稳定不重叠
+        // 根容器：3 行（顶部信息 / 主体 / 底部进度）
         var root = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 3,
-            Padding = Padding.Empty,
-            Margin = Padding.Empty
+            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3,
+            Padding = Padding.Empty, Margin = Padding.Empty
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62F));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66F));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62F));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
         Controls.Add(root);
 
         root.Controls.Add(BuildTop(), 0, 0);
@@ -81,74 +80,61 @@ public sealed class MainForm : Form
 
     private Control BuildTop()
     {
-        var top = new Panel
+        // 用 TableLayoutPanel：左列自动伸缩，右列固定宽度放在线状态，绝不会重叠/裁切
+        var grid = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
-            BackColor = Color.White,
-            Padding = new Padding(20, 0, 20, 0),
-            Margin = Padding.Empty
+            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2,
+            Margin = Padding.Empty, Padding = new Padding(20, 8, 20, 6), BackColor = Color.White
         };
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100F));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 60F));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 40F));
 
-        // 本机名（可点击改）
         _nameLabel.Text = _config.DeviceName;
         _nameLabel.Font = new Font("微软雅黑", 15F, FontStyle.Bold);
         _nameLabel.ForeColor = Color.FromArgb(28, 32, 38);
-        _nameLabel.Location = new Point(20, 9);
         _nameLabel.AutoSize = true;
         _nameLabel.Cursor = Cursors.Hand;
         _tip.SetToolTip(_nameLabel, "点击修改本机设备名");
-        top.Controls.Add(_nameLabel);
+        grid.Controls.Add(_nameLabel, 0, 0);
 
-        _nameBox.Location = new Point(18, 7);
         _nameBox.Size = new Size(260, 30);
         _nameBox.Font = new Font("微软雅黑", 12F);
         _nameBox.Visible = false;
-        top.Controls.Add(_nameBox);
+        grid.Controls.Add(_nameBox, 0, 0);
 
-        // IP / 端口 / 协议
         _localInfo.Text = $"{_discovery.LocalIp}:{_config.TcpPort}   ·   协议 v1.0   ·   点击名称可修改";
         _localInfo.ForeColor = Color.FromArgb(130, 138, 148);
         _localInfo.Font = new Font("微软雅黑", 9F);
-        _localInfo.Location = new Point(21, 38);
         _localInfo.AutoSize = true;
-        top.Controls.Add(_localInfo);
+        grid.Controls.Add(_localInfo, 0, 1);
 
-        // 右上角在线状态（用 Anchor 靠右，不设 Dock 避免抢布局）
-        _onlineDot.Text = "●  在线";
+        _onlineDot.Text = "● 在线";
         _onlineDot.ForeColor = Color.FromArgb(32, 168, 72);
         _onlineDot.Font = new Font("微软雅黑", 11F, FontStyle.Bold);
-        _onlineDot.AutoSize = true;
-        _onlineDot.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        _onlineDot.Location = new Point(top.Width - 100, 20);
-        top.Controls.Add(_onlineDot);
+        _onlineDot.Dock = DockStyle.Fill;
+        _onlineDot.TextAlign = ContentAlignment.MiddleRight;
+        grid.Controls.Add(_onlineDot, 1, 0);
+        grid.SetRowSpan(_onlineDot, 2);
 
-        // 底部分隔线
-        var line = new Panel
-        {
-            Dock = DockStyle.Bottom,
-            Height = 1,
-            BackColor = Color.FromArgb(224, 228, 233),
-            Margin = Padding.Empty
-        };
-        top.Controls.Add(line);
-        return top;
+        var host = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Margin = Padding.Empty };
+        host.Controls.Add(grid);
+        var line = new Panel { Dock = DockStyle.Bottom, Height = 1, BackColor = Color.FromArgb(224, 228, 233) };
+        host.Controls.Add(line);
+        return host;
     }
 
     private Control BuildBody()
     {
-        // 左右两栏：左 56% / 右 44%
         var body = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 1,
-            Margin = new Padding(12, 10, 12, 8),
-            Padding = Padding.Empty
+            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
+            Margin = new Padding(12, 10, 12, 8), Padding = Padding.Empty
         };
         body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 56F));
         body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 44F));
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-
         body.Controls.Add(BuildLeft(), 0, 0);
         body.Controls.Add(BuildRight(), 1, 0);
         return body;
@@ -158,42 +144,38 @@ public sealed class MainForm : Form
     {
         var left = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 3,
-            Margin = new Padding(0, 0, 6, 0),
-            Padding = Padding.Empty,
-            BackColor = Color.White
+            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3,
+            Margin = new Padding(0, 0, 6, 0), Padding = Padding.Empty, BackColor = Color.White
         };
         left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
         left.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
+        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
 
-        // 标题
-        var deviceTitle = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Margin = Padding.Empty, Padding = new Padding(14, 0, 0, 0) };
+        // 标题行也用 grid，避免 Width 计算导致副标题被裁
+        var head = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
+            Margin = Padding.Empty, Padding = new Padding(14, 0, 14, 0)
+        };
+        head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        head.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
         var titleLbl = new Label
         {
-            Text = "在线设备",
-            Font = new Font("微软雅黑", 11F, FontStyle.Bold),
-            ForeColor = Color.FromArgb(40, 46, 54),
-            Location = new Point(14, 8),
-            AutoSize = true
+            Text = "在线设备", Font = new Font("微软雅黑", 11F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(40, 46, 54), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft
         };
         var subLbl = new Label
         {
-            Text = "右键设备发送文件",
-            Font = new Font("微软雅黑", 8.5F),
-            ForeColor = Color.FromArgb(150, 156, 164),
-            AutoSize = true
+            Text = "右键设备发送文件", Font = new Font("微软雅黑", 8.5F),
+            ForeColor = Color.FromArgb(150, 156, 164), Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleRight, AutoSize = true, Margin = new Padding(0, 0, 0, 0)
         };
-        subLbl.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        subLbl.Location = new Point(deviceTitle.Width - 130, 11);
-        deviceTitle.Controls.Add(titleLbl);
-        deviceTitle.Controls.Add(subLbl);
-        left.Controls.Add(deviceTitle, 0, 0);
+        head.Controls.Add(titleLbl, 0, 0);
+        head.Controls.Add(subLbl, 1, 0);
+        left.Controls.Add(head, 0, 0);
 
-        // 设备列表
         _devices.View = View.Details;
         _devices.FullRowSelect = true;
         _devices.MultiSelect = false;
@@ -206,7 +188,10 @@ public sealed class MainForm : Form
         _devices.Columns.Add("设备名", 180);
         _devices.Columns.Add("IP 地址", 140);
         _devices.Columns.Add("端口", 70);
-        _deviceMenu.Items.AddRange(new ToolStripItem[] { _menuSend, _menuCopyIp, new ToolStripSeparator(), _menuRefresh });
+        _deviceMenu.Items.AddRange(new ToolStripItem[]
+        {
+            _menuSend, _menuCopyIp, new ToolStripSeparator(), _menuManual, _menuRefresh
+        });
         _deviceMenu.Opening += DeviceMenu_Opening;
 
         _emptyHint.Text = "暂无在线设备\n\n启动手机 App 或另一台电脑，稍候将自动出现在此处";
@@ -214,32 +199,25 @@ public sealed class MainForm : Form
         _emptyHint.ForeColor = Color.FromArgb(165, 170, 178);
         _emptyHint.Font = new Font("微软雅黑", 10F);
         _emptyHint.Dock = DockStyle.Fill;
-        _emptyHint.Visible = true;
 
         var listHost = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.White };
-        listHost.Controls.Add(_devices);
         listHost.Controls.Add(_emptyHint);
+        listHost.Controls.Add(_devices);
         _devices.BringToFront();
         left.Controls.Add(listHost, 0, 1);
 
-        // 打开收件夹
         var folderBar = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.White, Padding = new Padding(12, 7, 12, 7) };
         var openFolder = new Button
         {
-            Text = "打开收件夹",
-            Dock = DockStyle.Fill,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(246, 249, 253),
-            ForeColor = Color.FromArgb(40, 96, 168),
-            Font = new Font("微软雅黑", 9.5F),
-            Cursor = Cursors.Hand
+            Text = "打开收件夹", Dock = DockStyle.Fill, FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(246, 249, 253), ForeColor = Color.FromArgb(40, 96, 168),
+            Font = new Font("微软雅黑", 9.5F), Cursor = Cursors.Hand
         };
         openFolder.FlatAppearance.BorderColor = Color.FromArgb(206, 218, 234);
         openFolder.Click += (_, _) => OpenReceiveFolder();
         folderBar.Controls.Add(openFolder);
         left.Controls.Add(folderBar, 0, 2);
 
-        // 窗口缩放时按比例调整列宽
         Resize += (_, _) =>
         {
             int w = Math.Max(_devices.ClientSize.Width - 4, 200);
@@ -247,7 +225,6 @@ public sealed class MainForm : Form
             _devices.Columns[1].Width = (int)(w * 0.36);
             _devices.Columns[2].Width = w - _devices.Columns[0].Width - _devices.Columns[1].Width;
         };
-
         return left;
     }
 
@@ -255,25 +232,25 @@ public sealed class MainForm : Form
     {
         var right = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 2,
-            Margin = new Padding(6, 0, 0, 0),
-            Padding = Padding.Empty,
-            BackColor = Color.White
+            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2,
+            Margin = new Padding(6, 0, 0, 0), Padding = Padding.Empty, BackColor = Color.White
         };
         right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
         right.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-        var logHeader = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.White };
+        var head = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
+            Margin = Padding.Empty, Padding = new Padding(14, 0, 14, 0)
+        };
+        head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        head.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
         var logTitle = new Label
         {
-            Text = "传输日志",
-            Font = new Font("微软雅黑", 11F, FontStyle.Bold),
-            ForeColor = Color.FromArgb(40, 46, 54),
-            Location = new Point(14, 8),
-            AutoSize = true
+            Text = "传输日志", Font = new Font("微软雅黑", 11F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(40, 46, 54), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft
         };
         _clearLogBtn.Text = "清空";
         _clearLogBtn.Font = new Font("微软雅黑", 8.5F);
@@ -281,13 +258,11 @@ public sealed class MainForm : Form
         _clearLogBtn.FlatStyle = FlatStyle.Flat;
         _clearLogBtn.FlatAppearance.BorderSize = 0;
         _clearLogBtn.BackColor = Color.Transparent;
-        _clearLogBtn.AutoSize = true;
-        _clearLogBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        _clearLogBtn.Location = new Point(logHeader.Width - 50, 9);
+        _clearLogBtn.Dock = DockStyle.Fill;
         _clearLogBtn.Click += (_, _) => _log.Clear();
-        logHeader.Controls.Add(logTitle);
-        logHeader.Controls.Add(_clearLogBtn);
-        right.Controls.Add(logHeader, 0, 0);
+        head.Controls.Add(logTitle, 0, 0);
+        head.Controls.Add(_clearLogBtn, 1, 0);
+        right.Controls.Add(head, 0, 0);
 
         _log.Dock = DockStyle.Fill;
         _log.ReadOnly = true;
@@ -301,36 +276,20 @@ public sealed class MainForm : Form
 
     private Control BuildBottom()
     {
-        var bottom = new Panel
-        {
-            Dock = DockStyle.Fill,
-            BackColor = Color.White,
-            Margin = Padding.Empty,
-            Padding = new Padding(20, 10, 20, 8)
-        };
-
+        var bottom = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Margin = Padding.Empty, Padding = new Padding(20, 10, 20, 8) };
         _progressLabel.Dock = DockStyle.Fill;
         _progressLabel.Text = "就绪  ·  右键在线设备即可发送文件";
         _progressLabel.ForeColor = Color.FromArgb(110, 118, 128);
         _progressLabel.Font = new Font("微软雅黑", 9F);
-
         _progress.Dock = DockStyle.Bottom;
         _progress.Height = 8;
         _progress.Minimum = 0;
         _progress.Maximum = 1000;
         _progress.Value = 0;
         _progress.Style = ProgressBarStyle.Continuous;
-
         bottom.Controls.Add(_progressLabel);
         bottom.Controls.Add(_progress);
-
-        var line = new Panel
-        {
-            Dock = DockStyle.Top,
-            Height = 1,
-            BackColor = Color.FromArgb(224, 228, 233),
-            Margin = Padding.Empty
-        };
+        var line = new Panel { Dock = DockStyle.Top, Height = 1, BackColor = Color.FromArgb(224, 228, 233), Margin = Padding.Empty };
         bottom.Controls.Add(line);
         return bottom;
     }
@@ -355,6 +314,7 @@ public sealed class MainForm : Form
             _discovery.BroadcastOnce();
             AppendLog("已重新广播本机信息", Color.FromArgb(180, 130, 20));
         };
+        _menuManual.Click += (_, _) => ManualSendAsync().FireAndForget();
 
         _discovery.PeerChanged += (peer, added) => Ui(() =>
         {
@@ -363,15 +323,10 @@ public sealed class MainForm : Form
                 var existing = FindItem(peer.Key);
                 if (existing == null)
                 {
-                    var item = new ListViewItem(new[] { peer.Name, peer.Ip, peer.TcpPort.ToString() }) { Tag = peer };
-                    _devices.Items.Add(item);
+                    _devices.Items.Add(new ListViewItem(new[] { peer.Name, peer.Ip, peer.TcpPort.ToString() }) { Tag = peer });
                     AppendLog($"发现设备：{peer.Name} ({peer.Ip})", Color.FromArgb(180, 130, 20));
                 }
-                else
-                {
-                    existing.SubItems[0].Text = peer.Name;
-                    existing.Tag = peer;
-                }
+                else { existing.SubItems[0].Text = peer.Name; existing.Tag = peer; }
             }
             else
             {
@@ -385,6 +340,7 @@ public sealed class MainForm : Form
             _emptyHint.Visible = _devices.Items.Count == 0;
         });
 
+        _discovery.Diag += msg => Ui(() => AppendLogDiag(msg));
         _transfer.Log += msg => Ui(() => AppendLog(msg, Color.FromArgb(40, 40, 40)));
         _transfer.Progress += (dir, name, done, total) => Ui(() =>
         {
@@ -407,11 +363,7 @@ public sealed class MainForm : Form
             }
         });
 
-        FormClosing += (_, _) =>
-        {
-            _discovery.Dispose();
-            _transfer.Dispose();
-        };
+        FormClosing += (_, _) => { _discovery.Dispose(); _transfer.Dispose(); };
     }
 
     private void DeviceMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -425,15 +377,32 @@ public sealed class MainForm : Form
     private async Task SendFromMenuAsync()
     {
         if (_menuTarget == null) return;
-        using var dlg = new OpenFileDialog
-        {
-            Multiselect = true,
-            Title = $"发送文件到 {_menuTarget.Name}",
-            Filter = "所有文件|*.*"
-        };
+        using var dlg = new OpenFileDialog { Multiselect = true, Title = $"发送文件到 {_menuTarget.Name}", Filter = "所有文件|*.*" };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         var target = _menuTarget;
-        foreach (var file in dlg.FileNames)
+        await SendFilesToAsync(target, dlg.FileNames);
+    }
+
+    private async Task ManualSendAsync()
+    {
+        using var ipDlg = new InputDialog("手动直连", "输入对方电脑/手机的局域网 IP 地址：", _menuTarget?.Ip ?? "") { Owner = this };
+        if (ipDlg.ShowDialog(this) != DialogResult.OK) return;
+        var ip = ipDlg.Value.Trim();
+        if (string.IsNullOrWhiteSpace(ip)) return;
+        if (!System.Net.IPAddress.TryParse(ip, out _))
+        {
+            MessageBox.Show(this, "IP 地址格式不正确", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        using var dlg = new OpenFileDialog { Multiselect = true, Title = $"发送文件到 {ip}", Filter = "所有文件|*.*" };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        var target = new Peer { Name = ip, Ip = ip, TcpPort = _config.TcpPort };
+        await SendFilesToAsync(target, dlg.FileNames);
+    }
+
+    private async Task SendFilesToAsync(Peer target, string[] files)
+    {
+        foreach (var file in files)
         {
             _progress.Value = 0;
             AppendLog($"开始发送：{Path.GetFileName(file)} → {target.Name}", Color.FromArgb(30, 100, 180));
@@ -489,12 +458,10 @@ public sealed class MainForm : Form
     {
         Ui(() =>
         {
-            // 同一条消息 500ms 内重复则跳过，避免设备闪烁刷屏
             var now = DateTime.Now;
             if (msg == _lastLog && (now - _lastLogTime).TotalMilliseconds < 500) return;
             _lastLog = msg;
             _lastLogTime = now;
-
             _log.SelectionStart = _log.TextLength;
             _log.SelectionColor = color;
             _log.AppendText($"[{now:HH:mm:ss}] {msg}{Environment.NewLine}");
@@ -502,9 +469,62 @@ public sealed class MainForm : Form
         });
     }
 
+    // 发现诊断日志：相同内容 8 秒内只记一次，避免周期性广播刷屏
+    private string _lastDiag = "";
+    private DateTime _lastDiagTime = DateTime.MinValue;
+    private void AppendLogDiag(string msg)
+    {
+        var now = DateTime.Now;
+        if (msg == _lastDiag && (now - _lastDiagTime).TotalSeconds < 8) return;
+        _lastDiag = msg;
+        _lastDiagTime = now;
+        AppendLog("· " + msg, Color.FromArgb(160, 165, 172));
+    }
+
     private void Ui(Action action)
     {
         if (InvokeRequired) BeginInvoke(action);
         else action();
+    }
+}
+
+/// <summary>简单的文本输入对话框（手动 IP 直连用）。</summary>
+internal sealed class InputDialog : Form
+{
+    private readonly TextBox _box = new();
+    public string Value => _box.Text;
+
+    public InputDialog(string title, string label, string initial)
+    {
+        Text = title;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterParent;
+        Size = new Size(360, 130);
+        MaximizeBox = false; MinimizeBox = false;
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(14) };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F));
+        root.Controls.Add(new Label { Text = label, Dock = DockStyle.Fill, AutoSize = true }, 0, 0);
+        _box.Text = initial;
+        _box.Dock = DockStyle.Fill;
+        root.Controls.Add(_box, 0, 1);
+        var btns = new Panel { Dock = DockStyle.Fill };
+        var ok = new Button { Text = "确定", DialogResult = DialogResult.OK, Dock = DockStyle.Right, Width = 80 };
+        var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Dock = DockStyle.Right, Width = 80 };
+        btns.Controls.Add(ok);
+        btns.Controls.Add(cancel);
+        root.Controls.Add(btns, 0, 2);
+        Controls.Add(root);
+        AcceptButton = ok;
+        CancelButton = cancel;
+    }
+}
+
+internal static class FireAndForgetExt
+{
+    public static async void FireAndForget(this Task t)
+    {
+        try { await t; } catch { }
     }
 }

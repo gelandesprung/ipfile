@@ -92,15 +92,49 @@ fun AppScreen() {
     var showSettings by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
     var sheetPeer by remember { mutableStateOf<Peer?>(null) }
+    var showManualDialog by remember { mutableStateOf(false) }
+    var manualIp by remember { mutableStateOf("") }
+    // 发送目标：优先长按选中的设备，其次手动输入的 IP
+    var sendTarget by remember { mutableStateOf<Peer?>(null) }
     val scope = rememberCoroutineScope()
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) sheetPeer?.let { target ->
+        if (uri != null) sendTarget?.let { target ->
             scope.launch {
                 val (ok, msg) = P2PEngineHolder.get(ctx).sendFile(target, uri)
-                Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, if (ok) msg else "发送失败：$msg", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    if (showManualDialog) {
+        val ipOk = manualIp.trim().let { runCatching { java.net.InetAddress.getByName(it) }.isSuccess }
+        AlertDialog(
+            onDismissRequest = { showManualDialog = false },
+            title = { Text("手动直连发送") },
+            text = {
+                Column {
+                    Text("输入对方电脑/手机的局域网 IP，直接发送文件（绕开自动发现）。", fontSize = 12.sp, color = C.Gray)
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = manualIp, onValueChange = { manualIp = it },
+                        singleLine = true, label = { Text("IP 地址，如 192.168.2.196") },
+                        modifier = Modifier.fillMaxWidth(), isError = manualIp.isNotEmpty() && !ipOk
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val ip = manualIp.trim()
+                    if (ipOk) {
+                        sendTarget = Peer(ip, ip, P2PEngine.TCP_PORT)
+                        showManualDialog = false
+                        filePicker.launch(arrayOf("*/*"))
+                    }
+                }) { Text("选择文件") }
+            },
+            dismissButton = { TextButton(onClick = { showManualDialog = false }) { Text("取消") } }
+        )
     }
 
     if (showSettings) {
@@ -161,6 +195,8 @@ fun AppScreen() {
                     Text("在线设备", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.width(8.dp))
                     Text("${peers.size} 台 · 长按发送", fontSize = 11.sp, color = C.Gray)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { showManualDialog = true }) { Text("手动直连") }
                 }
             }
             if (peers.isEmpty()) {
@@ -196,7 +232,7 @@ fun AppScreen() {
                 ListItem(
                     headlineContent = { Text("发送文件…") },
                     leadingContent = { Icon(Icons.Default.Send, null, tint = C.Blue) },
-                    modifier = Modifier.clickable { filePicker.launch(arrayOf("*/*")); sheetPeer = null }
+                    modifier = Modifier.clickable { sendTarget = peer; filePicker.launch(arrayOf("*/*")); sheetPeer = null }
                 )
                 ListItem(
                     headlineContent = { Text("复制 IP 地址") },
@@ -357,7 +393,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                         ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
                     } catch (e: Exception) { "?" }
                     Text("飞鸽 P2P · v$ver", fontSize = 12.sp, color = C.Gray)
-                    Text("build 2026-11-20-b", fontSize = 11.sp, color = C.Gray)
+                    Text("build 2026-11-20-c · 含手动直连", fontSize = 11.sp, color = C.Gray)
                 }
             }
         }
