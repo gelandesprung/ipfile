@@ -1,0 +1,28 @@
+# Build results
+**/bin/
+**/obj/
+**/.gradle/
+**/build/
+**/.cxx/
+**/.idea/
+**/*.user
+
+# Local config with machine-specific paths
+**/local.properties
+
+# Generated received files and test artifacts
+**/received/
+**/__pycache__/
+*.pyc
+*.part
+
+# Keystores / signing
+*.jks
+*.keystore
+
+# WorkBuddy workspace data
+.workbuddy/
+
+# OS
+.DS_Store
+Thumbs.db

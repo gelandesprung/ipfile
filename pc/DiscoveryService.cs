@@ -1,0 +1,127 @@
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Collections.Concurrent;
+
+namespace FeigeP2P;
+
+/// <summary>
+/// UDP 局域网发现：每 2 秒广播自己，监听他人广播，6 秒未收到则移除。
+/// 所有事件回调发生在后台线程，UI 层需自行 Invoke。
+/// </summary>
+public sealed class DiscoveryService : IDisposable
+{
+    private readonly AppConfig _config;
+    private UdpClient? _udp;
+    private readonly CancellationTokenSource _cts = new();
+    private readonly ConcurrentDictionary<string, Peer> _peers = new();
+    private readonly string _localIp;
+    private string _deviceName;
+
+    public IReadOnlyDictionary<string, Peer> Peers => _peers;
+    public event Action<Peer, bool>? PeerChanged; // (peer, isAdded)
+
+    public DiscoveryService(AppConfig config)
+    {
+        _config = config;
+        _localIp = AppConfig.GetLocalIp();
+        _deviceName = config.DeviceName;
+    }
+
+    public string LocalIp => _localIp;
+
+    public void Start()
+    {
+        _udp = new UdpClient(new IPEndPoint(IPAddress.Any, _config.UdpPort))
+        {
+            EnableBroadcast = true,
+            ExclusiveAddressUse = false
+        };
+        try { _udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true); }
+        catch { }
+        _ = Task.Run(ReceiveLoopAsync);
+        _ = Task.Run(BroadcastLoopAsync);
+        _ = Task.Run(CleanupLoopAsync);
+        BroadcastOnce(); // 启动即宣告，缩短发现延迟
+    }
+
+    public void SetDeviceName(string newName)
+    {
+        _deviceName = newName;
+        BroadcastOnce(); // 立即让对方刷新显示名
+    }
+
+    public void BroadcastOnce(bool bye = false)
+    {
+        try
+        {
+            var text = Protocol.BuildDiscovery(_deviceName, _localIp, _config.TcpPort, bye);
+            var bytes = Encoding.UTF8.GetBytes(text);
+            _udp?.Send(bytes, bytes.Length, new IPEndPoint(IPAddress.Broadcast, _config.UdpPort));
+        }
+        catch { }
+    }
+
+    private async Task ReceiveLoopAsync()
+    {
+        while (!_cts.IsCancellationRequested)
+        {
+            try
+            {
+                var result = await _udp!.ReceiveAsync(_cts.Token);
+                var text = Encoding.UTF8.GetString(result.Buffer);
+                var pkt = Protocol.ParseDiscovery(text);
+                if (pkt == null) continue;
+                var peer = pkt.Peer;
+                if (peer.Ip == _localIp) continue; // 忽略自己（含本机多实例）
+
+                if (pkt.Bye)
+                {
+                    if (_peers.TryRemove(peer.Key, out _)) PeerChanged?.Invoke(peer, false);
+                    continue;
+                }
+
+                peer.LastSeen = DateTime.Now;
+                var isNew = !_peers.ContainsKey(peer.Key);
+                _peers[peer.Key] = peer;
+                PeerChanged?.Invoke(peer, isNew);
+            }
+            catch (OperationCanceledException) { break; }
+            catch { }
+        }
+    }
+
+    private async Task BroadcastLoopAsync()
+    {
+        while (!_cts.IsCancellationRequested)
+        {
+            BroadcastOnce();
+            try { await Task.Delay(2000, _cts.Token); }
+            catch (OperationCanceledException) { break; }
+        }
+    }
+
+    private async Task CleanupLoopAsync()
+    {
+        while (!_cts.IsCancellationRequested)
+        {
+            try { await Task.Delay(1000, _cts.Token); }
+            catch (OperationCanceledException) { break; }
+            var now = DateTime.Now;
+            foreach (var kv in _peers)
+            {
+                if ((now - kv.Value.LastSeen).TotalSeconds > 6 &&
+                    _peers.TryRemove(kv.Key, out var removed))
+                    PeerChanged?.Invoke(removed, false);
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        BroadcastOnce(bye: true);
+        _cts.Cancel();
+        _udp?.Close();
+        _cts.Dispose();
+    }
+}
