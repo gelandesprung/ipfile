@@ -1,18 +1,42 @@
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace FeigeP2P;
 
-/// <summary>局域网内的一台对端设备。</summary>
+/// <summary>
+/// 局域网内的一台对端设备。两种来源可并存：
+/// ① UDP 广播自动发现（会超时下线）；② 二维码配对（会话内常驻）。
+/// </summary>
 public sealed class Peer
 {
     public string Name { get; set; } = "";
     public string Ip { get; set; } = "";
     public int TcpPort { get; set; }
+
+    /// <summary>最近一次收到该设备广播的时间（仅局域网来源有意义）。</summary>
     public DateTime LastSeen { get; set; } = DateTime.Now;
-    public string Key => $"{Ip}:{TcpPort}";
+
+    /// <summary>通过 UDP 广播发现，仍在广播周期内（超时会被清掉）。</summary>
+    public bool IsLan { get; set; }
+
+    /// <summary>通过扫码/被扫码配对建立，仅存内存，会话内常驻。</summary>
+    public bool IsPaired { get; set; }
+
+    public DateTime PairedAt { get; set; } = DateTime.Now;
+    /// <summary>本次会话内刚配对成功，用于列表里显示「刚配对」标记。</summary>
+    public bool JustPaired { get; set; }
+
+    /// <summary>IPv6 必须用方括号包住地址再拼端口，否则冒号无法区分地址与端口。</summary>
+    public string Address => Ip.Contains(':') ? $"[{Ip}]:{TcpPort}" : $"{Ip}:{TcpPort}";
+
+    /// <summary>设备唯一键（地址 + 端口），IPv6 安全。</summary>
+    public string Key => Address;
+
+    public static string KeyOf(string ip, int tcpPort)
+        => ip.Contains(':') ? $"[{ip}]:{tcpPort}" : $"{ip}:{tcpPort}";
 }
 
 /// <summary>设备列表的变化类型。</summary>
@@ -24,6 +48,31 @@ public enum PeerChange
     Updated,
     /// <summary>收到 BYE 或超时，真正离线。</summary>
     Removed
+}
+
+/// <summary>一次二维码配对会话：token 一次性、10 分钟有效，收起/刷新即作废。</summary>
+public sealed class PairSession
+{
+    public string Token { get; init; } = "";
+    public DateTime CreatedAtUtc { get; init; } = DateTime.UtcNow;
+    public DateTime ExpiresAtUtc { get; init; } = DateTime.UtcNow;
+    /// <summary>已被使用（配对成功）后不可重放。</summary>
+    public bool Used { get; set; }
+    /// <summary>配对成功时记录对方名字，便于日志。</summary>
+    public string PeerName { get; set; } = "";
+
+    public TimeSpan Remaining => ExpiresAtUtc - DateTime.UtcNow;
+    public bool IsExpired => Remaining <= TimeSpan.Zero;
+    public bool IsValid => !Used && !IsExpired;
+
+    /// <summary>生成 32 位十六进制 token（16 字节密码学随机数）。</summary>
+    public static string NewToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+}
+
+/// <summary>出示方收到配对请求后，向用户确认所需的信息。</summary>
+public sealed record PairRequest(string PeerName, string RemoteIp, int PeerPort)
+{
+    public string Address => Peer.KeyOf(RemoteIp, PeerPort);
 }
 
 /// <summary>收到的一笔发文件请求（用于向用户确认是否接收）。</summary>
@@ -99,8 +148,69 @@ public sealed class AppConfig
         }
     }
 
-    /// <summary>取第一个可用的局域网 IPv4（跳过回环与虚拟网卡）。</summary>
-    public static string GetLocalIp()
+    /// <summary>
+    /// 本机可被手机访问的地址，按优先级排序：全局 IPv6 → 唯一本地 IPv6（fdxx）→ IPv4。
+    /// 跳过回环、链路本地 fe80::（手机无法凭 scope id 选网卡）、虚拟网卡与临时隐私地址优先降级。
+    /// </summary>
+    public static List<string> GetLocalIpCandidates()
+    {
+        var v6 = new List<(int Score, string Ip)>();
+        var v4 = new List<string>();
+        try
+        {
+            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback ||
+                    ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel) continue;
+
+                var name = ni.Name.ToLowerInvariant();
+                if (name.Contains("vmware") || name.Contains("virtual") || name.Contains("vethernet") ||
+                    name.Contains("wsl") || name.Contains("hyper-v") || name.Contains("docker"))
+                    continue;
+
+                foreach (var ua in ni.GetIPProperties().UnicastAddresses)
+                {
+                    var a = ua.Address;
+                    if (IPAddress.IsLoopback(a)) continue;
+
+                    if (a.AddressFamily == AddressFamily.InterNetworkV6)
+                    {
+                        if (a.IsIPv6LinkLocal || a.IsIPv6SiteLocal || a.IsIPv6Multicast || a.IsIPv6Teredo)
+                            continue;
+
+                        var bytes = a.GetAddressBytes();
+                        var isUla = (bytes[0] & 0xFE) == 0xFC;        // fc00::/7
+                        var isGlobal = (bytes[0] & 0xE0) == 0x20;     // 2000::/3
+                        if (!isUla && !isGlobal) continue;
+
+                        var score = isGlobal ? 100 : 50;
+                        if (!ua.IsTransient) score += 20;             // 稳定的全局地址优先于隐私临时地址
+                        v6.Add((score, a.ToString()));
+                    }
+                    else if (a.AddressFamily == AddressFamily.InterNetwork)
+                    {
+                        v4.Add(a.ToString());
+                    }
+                }
+            }
+        }
+        catch { }
+
+        return v6.OrderByDescending(x => x.Score).Select(x => x.Ip)
+            .Concat(v4)
+            .Distinct()
+            .ToList();
+    }
+
+    /// <summary>取最优的一个局域网地址；都没有时回退回环地址。</summary>
+    public static string GetLocalIp() => GetLocalIpCandidates().FirstOrDefault() ?? "127.0.0.1";
+
+    /// <summary>
+    /// 本机 IPv4 地址（UDP 广播用）。广播只能走 IPv4，所以这里必须跳过 IPv6 地址，
+    /// 否则对端拿到的地址无法 ping 通，也无法回连。
+    /// </summary>
+    public static string GetLocalIpV4()
     {
         var candidates = new List<string>();
         try

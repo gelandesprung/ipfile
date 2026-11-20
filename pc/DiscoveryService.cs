@@ -28,7 +28,8 @@ public sealed class DiscoveryService : IDisposable
     public DiscoveryService(AppConfig config)
     {
         _config = config;
-        _localIp = AppConfig.GetLocalIp();
+        // 广播走 IPv4，所以这里固定取 IPv4 地址（GetLocalIp 会更偏好 IPv6，不能在这里用）
+        _localIp = AppConfig.GetLocalIpV4();
         _deviceName = config.DeviceName;
     }
 

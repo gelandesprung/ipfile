@@ -8,11 +8,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- exe 在资源管理器/任务栏显示的图标 -->
     <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- 安装包版本号与此保持一致 -->
+    <Version>2.1.0</Version>
+    <AssemblyTitle>飞鸽 P2P</AssemblyTitle>
+    <Product>飞鸽 P2P</Product>
+    <Company>飞鸽</Company>
+    <FileVersion>2.1.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- 运行时读同一份 ico：窗口标题栏与托盘 -->
     <EmbeddedResource Include="app.ico" LogicalName="app.ico" />
+    <!-- 二维码生成：纯托管 PngByteQRCode，不依赖 System.Drawing -->
+    <PackageReference Include="QRCoder" Version="1.6.0" />
   </ItemGroup>
 
 </Project>

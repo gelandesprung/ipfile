@@ -8,7 +8,7 @@
   <ItemGroup>
     <Compile Include="../../pc/Protocol.cs" Link="Protocol.cs" />
     <Compile Include="../../pc/Models.cs" Link="Models.cs" />
-    <Compile Include="../../pc/DiscoveryService.cs" Link="DiscoveryService.cs" />
     <Compile Include="../../pc/TransferService.cs" Link="TransferService.cs" />
+    <Compile Include="../../pc/DiscoveryService.cs" Link="DiscoveryService.cs" />
   </ItemGroup>
 </Project>

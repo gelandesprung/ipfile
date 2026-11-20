@@ -6,30 +6,51 @@ import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
-import java.io.OutputStream
-import java.net.*
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.security.SecureRandom
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * P2P 核心引擎：UDP 发现 + TCP 接收/发送。
- * 由前台 ReceiveService 持有其生命周期，Activity 通过 sendFile() 发起发送。
+ * P2P 核心引擎：UDP 局域网自动发现 + 二维码配对 + TCP 接收/发送。
+ * 由前台 ReceiveService 持有其生命周期，Activity 通过 pairWith()/sendFile() 发起动作。
+ * 设备发现有两条并行通道：同一网段靠广播自动出现，跨网段靠扫码配对。
  */
 class P2PEngine(private val appContext: Context) {
     companion object {
-        const val UDP_PORT = 2425
         const val TCP_PORT = 2425
+        const val UDP_PORT = 2425
         private const val BUF = 64 * 1024
         /** 等待用户确认接收的最长时间，超时按拒绝处理。 */
         const val CONFIRM_TIMEOUT_MS = 60_000L
-        /** 发送方等待对方确认的时间，必须长于接收方确认窗口。 */
+        /** 等待用户确认配对的最长时间。 */
+        const val PAIR_CONFIRM_TIMEOUT_MS = 30_000L
+        /** 二维码有效期：10 分钟。 */
+        const val PAIR_TTL_MS = 10 * 60_000L
+        /** 发送方等待对方确认接收的时间，必须长于接收方确认窗口。 */
         private const val ACK_TIMEOUT_MS = 90_000L
+        /** 扫码方等待出示方配对应答的时间。 */
+        private const val PAIR_ACK_TIMEOUT_MS = 15_000L
+        /** 多久没收到某台设备的广播就判定下线（容忍 WiFi 丢包）。 */
+        private const val LAN_TTL_MS = 12_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var udp: DatagramSocket? = null
     private var server: ServerSocket? = null
-    /** 每个待确认请求对应一个 CompletableDeferred，用户选择后 complete。 */
-    private val pendingDecisions = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+    private var udp: DatagramSocket? = null
+
+    /** 每个待确认接收请求对应一个 CompletableDeferred，用户选择后 complete。 */
+    private val pendingDecisions = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+
+    /** 每个待确认配对请求对应一个 CompletableDeferred。 */
+    private val pendingPairs = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+
     @Volatile private var running = false
 
     fun start() {
@@ -38,7 +59,7 @@ class P2PEngine(private val appContext: Context) {
         val ip = NetUtils.localIp()
         AppState.setLocalIp(ip)
         AppState.log("已启动 · ${AppState.deviceName.value} ($ip:$TCP_PORT)")
-        startUdp(ip)
+        startUdp()
         startTcpServer()
     }
 
@@ -51,18 +72,26 @@ class P2PEngine(private val appContext: Context) {
         pendingDecisions.keys.toList().forEach { key ->
             pendingDecisions.remove(key)?.complete(false)
         }
+        pendingPairs.keys.toList().forEach { key ->
+            pendingPairs.remove(key)?.complete(false)
+        }
         AppState.setPending(null)
+        AppState.setPendingPair(null)
+        AppState.setPairSession(null)
         scope.cancel()
     }
 
-    /** 改名后立即广播一次。 */
+    // ---------------- UDP 局域网自动发现 ----------------
+
+    /** 改名后立即广播一次，让对方马上看到新名字。 */
     fun announceName() {
-        val ip = AppState.localIp.value.ifEmpty { NetUtils.localIp() }
-        broadcast(Protocol.buildDiscovery(AppState.deviceName.value, ip, TCP_PORT, false), ip)
+        broadcast(Protocol.buildDiscovery(AppState.deviceName.value, localIpV4(), TCP_PORT, false))
     }
 
-    // ---------------- UDP 发现 ----------------
-    private fun startUdp(ip: String) {
+    /** 广播只能走 IPv4，拿不到就退化成全网广播，对端仍能收到。 */
+    private fun localIpV4(): String = NetUtils.localIpV4()
+
+    private fun startUdp() {
         try {
             val sock = DatagramSocket(null).apply {
                 reuseAddress = true
@@ -71,18 +100,19 @@ class P2PEngine(private val appContext: Context) {
             }
             udp = sock
         } catch (e: Exception) {
-            AppState.log("UDP 端口占用：$UDP_PORT — ${e.message}")
+            AppState.log("局域网自动发现不可用（UDP $UDP_PORT 被占用）：${e.message}，仍可用扫码配对")
             return
         }
-        // 发送循环
+        AppState.log("局域网自动发现已开启 · 广播端口 $UDP_PORT")
+
+        // 每 2 秒宣告一次
         scope.launch {
-            announceName()
             while (isActive && running) {
-                delay(2000)
                 announceName()
+                delay(2000)
             }
         }
-        // 接收循环
+        // 收广播
         scope.launch {
             val buf = ByteArray(4096)
             while (isActive && running) {
@@ -91,12 +121,11 @@ class P2PEngine(private val appContext: Context) {
                     udp?.receive(pkt)
                     val text = String(pkt.data, pkt.offset, pkt.length, StandardCharsets.UTF_8)
                     val d = Protocol.parseDiscovery(text) ?: continue
-                    if (d.peer.ip == AppState.localIp.value) continue
+                    if (d.peer.ip == AppState.localIp.value || d.peer.ip == localIpV4()) continue
                     if (d.bye) {
-                        AppState.removePeer(d.peer.key)
-                        AppState.log("设备离线：${d.peer.name}")
+                        AppState.lanPeerGone(d.peer.key, d.peer.name, d.peer.tcpPort)
                     } else {
-                        val isNew = AppState.updatePeer(d.peer)
+                        val isNew = AppState.upsertLanPeer(d.peer)
                         if (isNew) AppState.log("发现设备：${d.peer.name} (${d.peer.ip})")
                     }
                 } catch (e: Exception) {
@@ -104,33 +133,93 @@ class P2PEngine(private val appContext: Context) {
                 }
             }
         }
-        // 清理离线设备（与 PC 端一致：12 秒，容忍 WiFi 丢包）
+        // 清理离线设备
         scope.launch {
             while (isActive && running) {
                 delay(1000)
-                AppState.prunePeers(12_000)
+                AppState.pruneLanPeers(LAN_TTL_MS)
             }
         }
     }
 
-    private fun broadcast(text: String, ip: String) {
+    private fun broadcast(text: String) {
         val bytes = text.toByteArray(StandardCharsets.UTF_8)
-        // 与 PC 端保持一致：主用全局广播 255.255.255.255；
-        // 同时发一份网段广播，覆盖部分路由器丢弃全局广播的情况。
+        // 与 PC 端一致：主用全局广播；再补一份网段广播，覆盖路由器丢全局广播的情况
+        val ip = localIpV4()
         val targets = mutableSetOf("255.255.255.255")
-        try {
-            val lastDot = ip.lastIndexOf('.')
-            if (lastDot > 0) targets.add("${ip.substring(0, lastDot)}.255")
-        } catch (e: Exception) { }
+        val lastDot = ip.lastIndexOf('.')
+        if (lastDot > 0) targets.add("${ip.substring(0, lastDot)}.255")
         for (t in targets) {
             try {
-                val pkt = DatagramPacket(bytes, bytes.size, InetAddress.getByName(t), UDP_PORT)
-                udp?.send(pkt)
+                udp?.send(DatagramPacket(bytes, bytes.size, InetAddress.getByName(t), UDP_PORT))
             } catch (e: Exception) { }
         }
     }
 
+    // ---------------- 配对会话 ----------------
+
+    /** 展开配对入口时调用：生成新 token 并广播到界面。 */
+    fun beginPairing(): PairSession {
+        val token = ByteArray(16).also { SecureRandom().nextBytes(it) }
+            .joinToString("") { "%02x".format(it) }
+        val session = PairSession(token, System.currentTimeMillis() + PAIR_TTL_MS)
+        AppState.setPairSession(session)
+        AppState.log("已生成配对二维码（10 分钟有效）")
+        return session
+    }
+
+    /** 收起配对页时作废当前 token。 */
+    fun cancelPairing() {
+        if (AppState.pairSession.value != null) AppState.log("二维码已失效")
+        AppState.setPairSession(null)
+    }
+
+    /** 用户对配对请求的决定（界面弹框或通知按钮调用）。 */
+    fun respondPair(requestId: String, accept: Boolean) {
+        val d = pendingPairs.remove(requestId)
+        if (AppState.pendingPair.value?.id == requestId) AppState.setPendingPair(null)
+        d?.complete(accept)
+    }
+
+    /** 用户对接收文件请求的决定。可由界面对话框或通知按钮调用。 */
+    fun respond(requestId: String, accept: Boolean) {
+        val d = pendingDecisions.remove(requestId)
+        if (AppState.pending.value?.id == requestId) AppState.setPending(null)
+        d?.complete(accept)
+    }
+
+    /** 扫码方：连接出示方完成配对，成功后把对方写入设备列表。 */
+    suspend fun pairWith(ip: String, tcpPort: Int, token: String): Pair<Boolean, String> =
+        withContext(Dispatchers.IO) {
+            var client: Socket? = null
+            try {
+                AppState.log("正在连接 $ip:$tcpPort 配对…")
+                client = Socket()
+                client.soTimeout = 10_000
+                withTimeout(10_000) { client.connect(InetSocketAddress(ip, tcpPort), 10_000) }
+                writeLine(client, Protocol.buildHello(token, AppState.deviceName.value, TCP_PORT))
+
+                val ackLine = withTimeout(PAIR_ACK_TIMEOUT_MS) {
+                    readLineRaw(client.getInputStream())
+                } ?: return@withContext false to "对方未回应配对请求"
+                val ack = Protocol.parseHelloAck(ackLine)
+                if (!ack.ok) return@withContext false to ack.reason.ifBlank { "对方拒绝配对" }
+
+                val peer = Peer(ack.name, ack.ip, ack.tcpPort, justPaired = true)
+                AppState.mergePairedPeer(peer)
+                AppState.notifyPairSuccess()
+                AppState.log("配对成功：${peer.name}（${peer.address}）已加入设备列表")
+                true to "已与 ${peer.name} 配对"
+            } catch (e: Exception) {
+                AppState.log("配对失败：${e.message}")
+                false to (e.message ?: "配对失败")
+            } finally {
+                try { client?.close() } catch (e: Exception) { }
+            }
+        }
+
     // ---------------- TCP 接收服务 ----------------
+
     private fun startTcpServer() {
         try {
             // 必须先设 reuseAddress 再 bind：用无参构造，否则端口 TIME_WAIT 时绑定失败
@@ -159,9 +248,19 @@ class P2PEngine(private val appContext: Context) {
         try {
             client.soTimeout = 10000
             val inputStream = client.getInputStream()
-            val headerLine = withTimeout(10_000) { readLineRaw(inputStream) }
-            if (headerLine == null) { AppState.log("接收：未收到请求头"); return@withContext }
-            val header = Protocol.parseFileRequest(headerLine)
+            val firstLine = withTimeout(10_000) { readLineRaw(inputStream) }
+            if (firstLine == null) {
+                AppState.log("接收：未收到请求头")
+                return@withContext
+            }
+
+            // 配对握手：短连接，校验 token 后即断开，不进入文件流程
+            if (firstLine.startsWith(Protocol.HELLO_MAGIC + "|")) {
+                handlePair(client, firstLine)
+                return@withContext
+            }
+
+            val header = Protocol.parseFileRequest(firstLine)
             if (header == null) {
                 writeLine(client, Protocol.buildAckReject("请求头格式错误"))
                 AppState.log("接收：请求头非法，已拒绝")
@@ -171,11 +270,15 @@ class P2PEngine(private val appContext: Context) {
             val remoteIp = try { client.inetAddress?.hostAddress ?: "对方" } catch (e: Exception) { "对方" }
 
             // － 接收确认：先问用户，同意才建文件、才回 ACK OK －
-            val requestId = java.util.UUID.randomUUID().toString()
+            val requestId = UUID.randomUUID().toString()
             val decision = CompletableDeferred<Boolean>()
             pendingDecisions[requestId] = decision
-            AppState.setPending(PendingRequest(requestId, header.fileName, header.size, remoteIp,
-                System.currentTimeMillis() + CONFIRM_TIMEOUT_MS))
+            AppState.setPending(
+                PendingRequest(
+                    requestId, header.fileName, header.size, remoteIp,
+                    System.currentTimeMillis() + CONFIRM_TIMEOUT_MS
+                )
+            )
             AppState.log("收到发送请求：${header.fileName} (${NetUtils.formatSize(header.size)}) 来自 $remoteIp，等待确认…")
 
             val accepted = try {
@@ -191,8 +294,12 @@ class P2PEngine(private val appContext: Context) {
             if (!accepted) {
                 writeLine(client, Protocol.buildAckReject("对方拒绝接收"))
                 AppState.log("已拒绝接收：${header.fileName}（已通知对方）")
-                AppState.addRecord(TransferRecord(TransferDirection.RECEIVE, header.fileName, remoteIp,
-                    header.size, false, nowTime()))
+                AppState.addRecord(
+                    TransferRecord(
+                        TransferDirection.RECEIVE, header.fileName, remoteIp,
+                        header.size, false, nowTime()
+                    )
+                )
                 return@withContext
             }
 
@@ -219,7 +326,9 @@ class P2PEngine(private val appContext: Context) {
                     if (n <= 0) break
                     out.write(buf, 0, n)
                     received += n
-                    AppState.setProgress(ProgressInfo(TransferDirection.RECEIVE, header.fileName, received, header.size))
+                    AppState.setProgress(
+                        ProgressInfo(TransferDirection.RECEIVE, header.fileName, received, header.size)
+                    )
                 }
                 out.flush()
             }
@@ -229,12 +338,18 @@ class P2PEngine(private val appContext: Context) {
             // 先落盘再回 DONE：让对方看到的「完成」意味着文件确实已就位
             writeLine(client, Protocol.buildDone(received))
             pending = false
-            AppState.addRecord(TransferRecord(TransferDirection.RECEIVE, header.fileName, remoteIp,
-                header.size, true, nowTime(), target.uri.toString()))
+            AppState.addRecord(
+                TransferRecord(
+                    TransferDirection.RECEIVE, header.fileName, remoteIp,
+                    header.size, true, nowTime(), target.uri.toString()
+                )
+            )
             AppState.log("接收完成：${header.fileName} → ${target.displayPath}")
         } catch (e: Exception) {
             AppState.log("接收失败：${e.message}")
-            AppState.addRecord(TransferRecord(TransferDirection.RECEIVE, "未知", "对方", 0, false, nowTime()))
+            AppState.addRecord(
+                TransferRecord(TransferDirection.RECEIVE, "未知", "对方", 0, false, nowTime())
+            )
         } finally {
             if (pending) AppState.log("接收中断，已清理未完成文件")
             try { client.close() } catch (e: Exception) { }
@@ -242,14 +357,86 @@ class P2PEngine(private val appContext: Context) {
         }
     }
 
-    /** 用户对接收请求的决定。可由界面对话框或通知按钮调用。 */
-    fun respond(requestId: String, accept: Boolean) {
-        val d = pendingDecisions.remove(requestId)
-        if (AppState.pending.value?.id == requestId) AppState.setPending(null)
-        d?.complete(accept)
+    /** 出示方：校验 token → 本机用户确认 → 回 ACK OK 并把扫码方入列。 */
+    private suspend fun handlePair(client: Socket, line: String) {
+        val req = Protocol.parseHello(line)
+        if (req == null) {
+            writeLine(client, Protocol.buildHelloAckReject("配对请求格式错误"))
+            AppState.log("配对：请求格式非法，已拒绝")
+            return
+        }
+
+        val session = AppState.pairSession.value
+        val invalidReason = when {
+            session == null -> "未在等待配对，请让对方刷新二维码"
+            session.used -> "该二维码已被使用，请刷新后重试"
+            !session.isValid() -> "二维码已过期，请让对方刷新"
+            session.token != req.token -> "配对码不正确，请重新扫码"
+            else -> null
+        }
+        if (invalidReason != null) {
+            writeLine(client, Protocol.buildHelloAckReject(invalidReason))
+            AppState.log("配对被拒绝：${req.name}（$invalidReason）")
+            return
+        }
+
+        val remoteIp = try { client.inetAddress?.hostAddress ?: "对方" } catch (e: Exception) { "对方" }
+        AppState.log("收到配对请求：${req.name}（$remoteIp），等待确认…")
+
+        val requestId = UUID.randomUUID().toString()
+        val decision = CompletableDeferred<Boolean>()
+        pendingPairs[requestId] = decision
+        AppState.setPendingPair(
+            PendingPair(
+                requestId, req.name, remoteIp, req.tcpPort,
+                System.currentTimeMillis() + PAIR_CONFIRM_TIMEOUT_MS
+            )
+        )
+
+        val accepted = try {
+            withTimeoutOrNull(PAIR_CONFIRM_TIMEOUT_MS) { decision.await() } ?: false
+        } catch (e: Exception) {
+            false
+        } finally {
+            pendingPairs.remove(requestId)
+            if (AppState.pendingPair.value?.id == requestId) AppState.setPendingPair(null)
+        }
+
+        if (!accepted) {
+            writeLine(client, Protocol.buildHelloAckReject("对方拒绝配对"))
+            AppState.log("已拒绝配对：${req.name}（已通知对方）")
+            return
+        }
+
+        // 用户确认期间 token 可能过期或被另一个并发请求用掉：再校验并原子消费
+        val current = AppState.pairSession.value
+        val consumeReason = when {
+            current == null -> "配对会话已结束，请刷新二维码"
+            current.used -> "该二维码已被使用，请刷新后重试"
+            !current.isValid() -> "二维码已过期，请让对方刷新"
+            current.token != req.token -> "配对码不正确，请重新扫码"
+            else -> null
+        }
+        if (consumeReason != null) {
+            writeLine(client, Protocol.buildHelloAckReject(consumeReason))
+            AppState.log("配对失败：${req.name}（$consumeReason）")
+            return
+        }
+        AppState.setPairSession(current!!.copy(used = true))
+
+        writeLine(
+            client,
+            Protocol.buildHelloAckOk(AppState.deviceName.value, AppState.localIp.value, TCP_PORT)
+        )
+
+        val peer = Peer(req.name, remoteIp, req.tcpPort, justPaired = true)
+        AppState.mergePairedPeer(peer)
+        AppState.notifyPairSuccess()
+        AppState.log("配对成功：${peer.name}（${peer.address}）已加入设备列表")
     }
 
     // ---------------- TCP 发送 ----------------
+
     suspend fun sendFile(target: Peer, uri: Uri): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val cr = appContext.contentResolver
         val displayName = queryDisplayName(cr, uri) ?: "文件"
@@ -308,13 +495,19 @@ class P2PEngine(private val appContext: Context) {
                 val recv = doneLine?.let { Protocol.parseDone(it) }
                 if (recv == null || recv != sent) return@withContext false to "对方确认数不符（期望 $sent，实收 $recv）"
             }
-            AppState.addRecord(TransferRecord(TransferDirection.SEND, displayName, target.name,
-                size.coerceAtLeast(0), true, nowTime(), uri.toString()))
+            AppState.addRecord(
+                TransferRecord(
+                    TransferDirection.SEND, displayName, target.name,
+                    size.coerceAtLeast(0), true, nowTime(), uri.toString()
+                )
+            )
             AppState.log("发送完成：$displayName → ${target.name}")
             true to "已发送 $displayName"
         } catch (e: Exception) {
             AppState.log("发送失败：${e.message}")
-            AppState.addRecord(TransferRecord(TransferDirection.SEND, displayName, target.name, 0, false, nowTime()))
+            AppState.addRecord(
+                TransferRecord(TransferDirection.SEND, displayName, target.name, 0, false, nowTime())
+            )
             false to (e.message ?: "未知错误")
         } finally {
             try { client?.close() } catch (e: Exception) { }
@@ -368,5 +561,6 @@ class P2PEngine(private val appContext: Context) {
         socket.getOutputStream().flush()
     }
 
-    private fun nowTime(): String = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+    private fun nowTime(): String =
+        java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
 }

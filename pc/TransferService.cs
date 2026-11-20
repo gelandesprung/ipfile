@@ -1,18 +1,21 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace FeigeP2P;
 
 /// <summary>
-/// TCP 点对点文件传输：既做服务端接收，也做客户端发送。
-/// 严格遵循 PROTOCOL.md 第 3 节。事件回调在后台线程，UI 层需 Invoke。
+/// TCP 点对点文件传输 + 二维码配对会话。
+/// 监听 IPv6 双栈（同时接受 IPv4），文件协议仍是 FG_FILE v1，配对新增 FG_HELLO/FG_HELLO_ACK。
+/// 事件回调在后台线程，UI 层需 Invoke。
 /// </summary>
 public sealed class TransferService : IDisposable
 {
     private readonly AppConfig _config;
     private readonly TcpListener _listener;
     private readonly CancellationTokenSource _cts = new();
+    private readonly string _localIp;
 
     // 事件：(方向, 文件名, 对端名, 大小, 是否成功, 说明)
     public event Action<string, string, string, long, bool, string>? TransferFinished;
@@ -22,6 +25,10 @@ public sealed class TransferService : IDisposable
     public event Action<string>? Log;
     // 接收确认：收到发文件请求时询问用户是否接收，并带回用户选择的保存位置。无人订阅则按自动接收处理。
     public event Func<IncomingRequest, Task<ReceiveDecision>>? ConfirmReceive;
+    // 配对确认：收到合法的 FG_HELLO 时询问用户是否允许该设备配对。无人订阅则自动允许。
+    public event Func<PairRequest, Task<bool>>? ConfirmPair;
+    // 配对成功：把对方交给 UI 写入设备列表。
+    public event Action<Peer>? PeerPaired;
 
     private const int BufferSize = 64 * 1024;
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(10);
@@ -29,17 +36,66 @@ public sealed class TransferService : IDisposable
     private static readonly TimeSpan ConfirmTimeout = TimeSpan.FromSeconds(60);
     /// <summary>发送方等待对方应答的时间，必须长于接收方的确认窗口。</summary>
     private static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(90);
+    /// <summary>等待本机用户点「允许配对」的时间。</summary>
+    private static readonly TimeSpan PairConfirmTimeout = TimeSpan.FromSeconds(30);
+    /// <summary>扫码方等待出示方配对应答的时间。</summary>
+    private static readonly TimeSpan PairAckTimeout = TimeSpan.FromSeconds(15);
 
-    public TransferService(AppConfig config)
+    private readonly object _pairLock = new();
+    private PairSession? _session;
+
+    /// <summary>当前配对会话（收起/刷新后为 null）。</summary>
+    public PairSession? CurrentSession
+    {
+        get { lock (_pairLock) return _session; }
+    }
+
+    /// <summary>二维码有效期，默认 10 分钟；测试可注入更短的值。</summary>
+    public TimeSpan PairLifetime { get; }
+
+    public TransferService(AppConfig config, TimeSpan? pairLifetime = null)
     {
         _config = config;
-        _listener = new TcpListener(IPAddress.Any, config.TcpPort);
+        PairLifetime = pairLifetime ?? TimeSpan.FromMinutes(10);
+        _localIp = AppConfig.GetLocalIp();
+
+        // 双栈：一个端口同时收 IPv4 与 IPv6；系统不支持 IPv6 时退回纯 IPv4。
+        TcpListener listener;
+        try
+        {
+            listener = new TcpListener(IPAddress.IPv6Any, config.TcpPort);
+            listener.Server.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, false);
+        }
+        catch
+        {
+            listener = new TcpListener(IPAddress.Any, config.TcpPort);
+        }
+        _listener = listener;
     }
 
     public void Start()
     {
         _listener.Start();
         _ = Task.Run(AcceptLoopAsync);
+    }
+
+    /// <summary>生成新的配对会话（旧 token 立即作废），返回会话供界面生成二维码。</summary>
+    public PairSession BeginPairing()
+    {
+        var session = new PairSession
+        {
+            Token = PairSession.NewToken(),
+            CreatedAtUtc = DateTime.UtcNow,
+            ExpiresAtUtc = DateTime.UtcNow + PairLifetime
+        };
+        lock (_pairLock) _session = session;
+        return session;
+    }
+
+    /// <summary>收起/刷新时作废当前二维码。</summary>
+    public void CancelPairing()
+    {
+        lock (_pairLock) _session = null;
     }
 
     private async Task AcceptLoopAsync()
@@ -65,13 +121,21 @@ public sealed class TransferService : IDisposable
             client.SendTimeout = (int)HandshakeTimeout.TotalMilliseconds;
             var stream = client.GetStream();
 
+            var ep = client.Client.RemoteEndPoint as IPEndPoint;
+            var remoteIp = NormalizeIp(ep);
             // 打出对端 IP：若手机发文件时这里连这一行都没有，说明连接根本没到本机（防火墙/网段问题），
             // 而不是协议解析问题。这是区分两类故障最直接的证据。
-            var ep = client.Client.RemoteEndPoint as IPEndPoint;
-            if (ep != null) Log?.Invoke($"收到来自 {ep.Address} 的连接");
+            if (ep != null) Log?.Invoke($"收到来自 {remoteIp} 的连接");
 
             var header = await ReadLineAsync(stream, HandshakeTimeout);
             if (header == null) { Log?.Invoke("接收：未收到请求头，已断开"); return; }
+
+            // 配对握手：短连接，校验 token 后即断开，不进入文件流程
+            if (header.StartsWith(Protocol.HelloMagic + "|", StringComparison.Ordinal))
+            {
+                await HandlePairAsync(client, stream, header, remoteIp);
+                return;
+            }
 
             if (!Protocol.ParseFileRequest(header, out var fileName, out var size, out _))
             {
@@ -84,8 +148,6 @@ public sealed class TransferService : IDisposable
             // 安全检查：只允许文件名，不允许路径分量
             fileName = Path.GetFileName(fileName.Replace('\\', '/'));
             if (string.IsNullOrWhiteSpace(fileName)) fileName = "未命名文件";
-
-            var remoteIp = ep?.Address.ToString() ?? "对方";
 
             // － 接收确认：先问用户，同意才建文件、才回 ACK OK －
             var decision = new ReceiveDecision(true);
@@ -193,6 +255,162 @@ public sealed class TransferService : IDisposable
         }
     }
 
+    // ---------------- 配对握手 ----------------
+
+    private async Task HandlePairAsync(TcpClient client, NetworkStream stream, string header, string remoteIp)
+    {
+        var req = Protocol.ParseHello(header);
+        if (req == null)
+        {
+            await TryWriteAsync(stream, Protocol.BuildHelloAckReject("配对请求格式错误"));
+            Log?.Invoke("配对：请求格式非法，已拒绝");
+            return;
+        }
+
+        var (ok, reason) = ValidateSession(req.Token);
+        if (!ok)
+        {
+            await TryWriteAsync(stream, Protocol.BuildHelloAckReject(reason));
+            Log?.Invoke($"配对被拒绝：{req.Name}（{reason}）");
+            return;
+        }
+
+        Log?.Invoke($"收到配对请求：{req.Name} ({remoteIp})，等待确认…");
+
+        var accepted = true;
+        var ask = ConfirmPair;
+        if (ask != null)
+        {
+            try
+            {
+                var task = ask(new PairRequest(req.Name, remoteIp, req.TcpPort));
+                var finished = await Task.WhenAny(task, Task.Delay(PairConfirmTimeout));
+                accepted = finished == task && await task;
+            }
+            catch (Exception ex)
+            {
+                Log?.Invoke($"配对确认异常：{ex.Message}");
+                accepted = false;
+            }
+        }
+
+        if (!accepted)
+        {
+            await TryWriteAsync(stream, Protocol.BuildHelloAckReject("对方拒绝配对"));
+            Log?.Invoke($"已拒绝配对：{req.Name}（已通知对方）");
+            return;
+        }
+
+        // 用户确认期间 token 可能已过期，或被另一个并发请求用掉：这里必须再校验一次并原子消费
+        var (consumed, consumeReason) = ConsumeSession(req.Token, req.Name);
+        if (!consumed)
+        {
+            await TryWriteAsync(stream, Protocol.BuildHelloAckReject(consumeReason));
+            Log?.Invoke($"配对失败：{req.Name}（{consumeReason}）");
+            return;
+        }
+
+        await TryWriteAsync(stream, Protocol.BuildHelloAckOk(_config.DeviceName, _localIp, _config.TcpPort));
+
+        var peer = new Peer
+        {
+            Name = req.Name,
+            Ip = remoteIp,
+            TcpPort = req.TcpPort,
+            IsPaired = true,
+            PairedAt = DateTime.Now,
+            JustPaired = true
+        };
+        Log?.Invoke($"配对成功：{peer.Name}（{peer.Address}）已加入设备列表");
+        PeerPaired?.Invoke(peer);
+    }
+
+    private (bool Ok, string Reason) ValidateSession(string token)
+    {
+        lock (_pairLock)
+        {
+            if (_session == null) return (false, "未在等待配对，请让对方刷新二维码");
+            if (_session.Used) return (false, "该二维码已被使用，请刷新后重试");
+            if (_session.IsExpired) return (false, "二维码已过期，请让对方刷新");
+            if (!FixedTimeEquals(_session.Token, token)) return (false, "配对码不正确，请重新扫码");
+            return (true, "");
+        }
+    }
+
+    private (bool Ok, string Reason) ConsumeSession(string token, string peerName)
+    {
+        lock (_pairLock)
+        {
+            if (_session == null) return (false, "配对会话已结束，请刷新二维码");
+            if (_session.Used) return (false, "该二维码已被使用，请刷新后重试");
+            if (_session.IsExpired) return (false, "二维码已过期，请让对方刷新");
+            if (!FixedTimeEquals(_session.Token, token)) return (false, "配对码不正确，请重新扫码");
+            _session.Used = true;
+            _session.PeerName = peerName;
+            return (true, "");
+        }
+    }
+
+    private static bool FixedTimeEquals(string a, string b)
+    {
+        var x = Encoding.UTF8.GetBytes(a);
+        var y = Encoding.UTF8.GetBytes(b);
+        return x.Length == y.Length && CryptographicOperations.FixedTimeEquals(x, y);
+    }
+
+    private static async Task TryWriteAsync(NetworkStream stream, string text)
+    {
+        try { await stream.WriteAsync(Encoding.UTF8.GetBytes(text)); } catch { }
+    }
+
+    // ---------------- 发送 ----------------
+
+    /// <summary>扫码方：连接出示方完成配对，返回对方信息（由 UI 写入设备列表）。</summary>
+    public async Task<(bool Ok, string Message, Peer? Peer)> PairWithAsync(
+        string ip, int tcpPort, string token, string myName)
+    {
+        var host = NormalizeHost(ip);
+        using var client = new TcpClient();
+        try
+        {
+            var connectTask = ConnectAsync(client, host, tcpPort);
+            if (await Task.WhenAny(connectTask, Task.Delay(HandshakeTimeout)) != connectTask)
+                return (false, "连接超时，请确认两台设备在同一局域网", null);
+            await connectTask;
+
+            client.ReceiveTimeout = (int)PairAckTimeout.TotalMilliseconds;
+            client.SendTimeout = (int)HandshakeTimeout.TotalMilliseconds;
+            var stream = client.GetStream();
+
+            await stream.WriteAsync(Encoding.UTF8.GetBytes(Protocol.BuildHello(token, myName, _config.TcpPort)));
+            var ackLine = await ReadLineAsync(stream, PairAckTimeout);
+            if (ackLine == null) return (false, "对方未回应配对请求", null);
+
+            var ack = Protocol.ParseHelloAck(ackLine);
+            if (!ack.Ok) return (false, string.IsNullOrWhiteSpace(ack.Reason) ? "对方拒绝配对" : ack.Reason, null);
+
+            var peer = new Peer
+            {
+                Name = ack.Name,
+                Ip = NormalizeHost(ack.Ip),
+                TcpPort = ack.TcpPort,
+                IsPaired = true,
+                PairedAt = DateTime.Now,
+                JustPaired = true
+            };
+            Log?.Invoke($"配对成功：{peer.Name}（{peer.Address}）已加入设备列表");
+            return (true, $"已与 {peer.Name} 配对", peer);
+        }
+        catch (SocketException)
+        {
+            return (false, "设备不可达，请让对方重新出示二维码", null);
+        }
+        catch (Exception ex)
+        {
+            return (false, $"配对失败：{ex.Message}", null);
+        }
+    }
+
     /// <summary>向指定设备发送单个文件。返回 (成功, 说明)。</summary>
     public async Task<(bool, string)> SendFileAsync(Peer target, string filePath)
     {
@@ -201,10 +419,10 @@ public sealed class TransferService : IDisposable
         using var client = new TcpClient();
         try
         {
-            var connectTask = client.ConnectAsync(target.Ip, target.TcpPort);
+            var connectTask = ConnectAsync(client, NormalizeHost(target.Ip), target.TcpPort);
             var timeoutTask = Task.Delay(HandshakeTimeout);
             if (await Task.WhenAny(connectTask, timeoutTask) != connectTask)
-                return (false, "连接超时");
+                return (false, "连接超时，设备可能已离线");
             await connectTask;
 
             client.ReceiveTimeout = (int)HandshakeTimeout.TotalMilliseconds;
@@ -248,12 +466,36 @@ public sealed class TransferService : IDisposable
             TransferFinished?.Invoke("发送", fileName, target.Name, size, true, msg);
             return (true, msg);
         }
+        catch (SocketException)
+        {
+            Log?.Invoke("发送失败：设备不可达");
+            TransferFinished?.Invoke("发送", fileName, target.Name, size, false, "设备不可达");
+            return (false, "设备不可达，请让对方重新出示二维码后重试");
+        }
         catch (Exception ex)
         {
             Log?.Invoke($"发送失败：{ex.Message}");
             TransferFinished?.Invoke("发送", fileName, target.Name, size, false, ex.Message);
             return (false, ex.Message);
         }
+    }
+
+    private static async Task ConnectAsync(TcpClient client, string host, int port)
+    {
+        if (IPAddress.TryParse(host, out var addr))
+            await client.ConnectAsync(addr, port);
+        else
+            await client.ConnectAsync(host, port);
+    }
+
+    private static string NormalizeHost(string ip) => ip.Trim().Trim('[', ']');
+
+    private static string NormalizeIp(IPEndPoint? ep)
+    {
+        var a = ep?.Address;
+        if (a == null) return "对方";
+        if (a.IsIPv4MappedToIPv6) a = a.MapToIPv4();
+        return a.ToString();
     }
 
     private static async Task<string?> ReadLineAsync(NetworkStream stream, TimeSpan timeout)
@@ -304,6 +546,7 @@ public sealed class TransferService : IDisposable
     {
         _cts.Cancel();
         try { _listener.Stop(); } catch { }
+        CancelPairing();
         _cts.Dispose();
     }
 }

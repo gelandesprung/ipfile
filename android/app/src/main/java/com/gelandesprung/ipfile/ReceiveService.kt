@@ -29,11 +29,15 @@ class ReceiveService : Service() {
         const val ALERT_CHANNEL_ID = "ipfile_confirm"
         const val NOTI_ID = 1001
         const val ALERT_NOTI_ID = 1002
+        const val PAIR_NOTI_ID = 1003
         const val ACTION_START = "start"
         const val ACTION_STOP = "stop"
         const val ACTION_ACCEPT = "accept"
         const val ACTION_REJECT = "reject"
+        const val ACTION_PAIR_ACCEPT = "pair_accept"
+        const val ACTION_PAIR_REJECT = "pair_reject"
         const val EXTRA_REQUEST_ID = "request_id"
+        const val EXTRA_PAIR_ID = "pair_id"
 
         fun start(context: Context) {
             val i = Intent(context, ReceiveService::class.java).apply { action = ACTION_START }
@@ -61,12 +65,20 @@ class ReceiveService : Service() {
                 getSystemService(NotificationManager::class.java)?.cancel(ALERT_NOTI_ID)
                 return START_NOT_STICKY
             }
+            ACTION_PAIR_ACCEPT, ACTION_PAIR_REJECT -> {
+                val id = intent.getStringExtra(EXTRA_PAIR_ID) ?: ""
+                val accept = intent.action == ACTION_PAIR_ACCEPT
+                (engine ?: P2PEngineHolder.get(applicationContext)).respondPair(id, accept)
+                getSystemService(NotificationManager::class.java)?.cancel(PAIR_NOTI_ID)
+                return START_NOT_STICKY
+            }
             else -> {
                 if (engine == null) {
                     engine = P2PEngineHolder.get(applicationContext).also { it.start() }
                     AppState.setServiceRunning(true)
                     observeProgress()
                     observePending()
+                    observePendingPair()
                 }
             }
         }
@@ -98,6 +110,21 @@ class ReceiveService : Service() {
                         nm.cancel(ALERT_NOTI_ID)
                     } else {
                         nm.notify(ALERT_NOTI_ID, buildConfirmNotification(pending))
+                    }
+                }
+        }
+    }
+
+    /** 有配对请求时发通知（App 在前台时由界面弹框，不重复打扰）。 */
+    private fun observePendingPair() {
+        uiScope.launch {
+            combine(AppState.pendingPair, AppState.uiVisible) { pair, visible -> pair to visible }
+                .collectLatest { (pair, visible) ->
+                    val nm = getSystemService(NotificationManager::class.java) ?: return@collectLatest
+                    if (pair == null || visible) {
+                        nm.cancel(PAIR_NOTI_ID)
+                    } else {
+                        nm.notify(PAIR_NOTI_ID, buildPairNotification(pair))
                     }
                 }
         }
@@ -162,10 +189,39 @@ class ReceiveService : Service() {
             .build()
     }
 
+    private fun buildPairNotification(p: PendingPair): Notification {
+        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), pendingFlags())
+        val accept = PendingIntent.getService(this, 3, Intent(this, ReceiveService::class.java).apply {
+            action = ACTION_PAIR_ACCEPT
+            putExtra(EXTRA_PAIR_ID, p.id)
+        }, pendingFlags())
+        val reject = PendingIntent.getService(this, 4, Intent(this, ReceiveService::class.java).apply {
+            action = ACTION_PAIR_REJECT
+            putExtra(EXTRA_PAIR_ID, p.id)
+        }, pendingFlags())
+
+        return NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("${p.peerName} 请求配对")
+            .setContentText("${p.peerIp} · 配对后可互相发送文件")
+            .setStyle(NotificationCompat.BigTextStyle().bigText("${p.peerName}（${p.peerIp}）请求配对\n允许后对方会出现在设备列表，30 秒内未选择将自动拒绝"))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .addAction(0, "允许配对", accept)
+            .addAction(0, "拒绝", reject)
+            .build()
+    }
+
     override fun onDestroy() {
         job?.cancel()
-        uiScope.launch { AppState.setPending(null) }
+        uiScope.launch {
+            AppState.setPending(null)
+            AppState.setPendingPair(null)
+        }
         getSystemService(NotificationManager::class.java)?.cancel(ALERT_NOTI_ID)
+        getSystemService(NotificationManager::class.java)?.cancel(PAIR_NOTI_ID)
         engine?.stop()
         engine = null
         P2PEngineHolder.release()

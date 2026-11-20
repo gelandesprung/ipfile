@@ -6,8 +6,8 @@ namespace FeigeP2P;
 public sealed class MainForm : Form
 {
     private readonly AppConfig _config;
-    private readonly DiscoveryService _discovery;
     private readonly TransferService _transfer;
+    private readonly DiscoveryService _discovery;
 
     private readonly Label _nameLabel = new();
     private readonly TextBox _nameBox = new();
@@ -25,27 +25,53 @@ public sealed class MainForm : Form
     private readonly ToolTip _tip = new();
     private readonly ToolStripMenuItem _menuSend;
     private readonly ToolStripMenuItem _menuCopyIp;
+    private readonly ToolStripMenuItem _menuRemove;
     private readonly ToolStripMenuItem _menuRefresh;
     private readonly ToolStripMenuItem _menuManual;
     private readonly NotifyIcon _tray = new();
     private readonly ToolStripMenuItem _menuOpenFolder = new("打开收件夹");
+
+    // 配对入口与展开面板（默认收起，只有点击入口才显示二维码）
+    private readonly Button _addDeviceBtn = new();
+    private readonly Panel _pairPanel = new();
+    private readonly PictureBox _qrBox = new();
+    private readonly Label _expiryLabel = new();
+    private readonly Label _pairAddr = new();
+    private readonly Button _refreshQr = new();
+    private readonly Button _collapseQr = new();
+    private readonly Panel _expiryTrack = new();
+    private double _expiryFraction = 1;
+    private Color _expiryColor = Color.FromArgb(30, 111, 217);
+    private readonly System.Windows.Forms.Timer _pairTimer = new() { Interval = 1000 };
+
+    private TableLayoutPanel? _leftGrid;
+    private RowStyle? _entryRowStyle;
+    private RowStyle? _pairRowStyle;
+    private bool _pairExpanded;
+    private string _localIp = "";
 
     /// <summary>真正的退出标志：点窗口关闭键只是收进托盘，只有托盘「退出」才结束进程。</summary>
     private bool _reallyExit;
     private bool _trayHintShown;
 
     private Peer? _menuTarget;
+    /// <summary>设备列表的唯一数据源：局域网发现与扫码配对都写进这里，再统一渲染到 ListView。</summary>
+    private readonly Dictionary<string, Peer> _peers = new();
     private string _lastLog = "";
     private DateTime _lastLogTime = DateTime.MinValue;
+    private string _lastDiag = "";
+    private DateTime _lastDiagTime = DateTime.MinValue;
 
     public MainForm()
     {
         _config = AppConfig.Load();
-        _discovery = new DiscoveryService(_config);
+        _localIp = AppConfig.GetLocalIp();
         _transfer = new TransferService(_config);
+        _discovery = new DiscoveryService(_config);
 
         _menuSend = new ToolStripMenuItem("发送文件…");
         _menuCopyIp = new ToolStripMenuItem("复制 IP 地址");
+        _menuRemove = new ToolStripMenuItem("从列表移除");
         _menuRefresh = new ToolStripMenuItem("刷新设备");
         _menuManual = new ToolStripMenuItem("手动输入 IP 直连…");
 
@@ -53,26 +79,30 @@ public sealed class MainForm : Form
         WireEvents();
         BuildTray();
 
-        // 两个服务分别启动：任一失败都要给出明确原因，而不是整个程序闪退
-        string? tcpError = null, udpError = null;
+        // 接收服务失败时要给出明确原因，而不是整个程序闪退
+        string? tcpError = null;
         try { _transfer.Start(); }
         catch (Exception ex) { tcpError = ex.Message; }
 
+        // UDP 自动发现是独立的尽力而为通道，绑定失败不能影响主流程
+        string? udpError = null;
         try { _discovery.Start(); }
         catch (Exception ex) { udpError = ex.Message; }
 
-        AppendLog($"已启动 · 本机 {_config.DeviceName} ({_discovery.LocalIp}:{_config.TcpPort})", Color.FromArgb(25, 100, 180));
+        AppendLog($"已启动 · 本机 {_config.DeviceName} ({_localIp}:{_config.TcpPort})", Color.FromArgb(25, 100, 180));
 
         if (tcpError == null)
-            AppendLog($"接收服务已就绪 · 监听 0.0.0.0:{_config.TcpPort}，等待对方发送", Color.FromArgb(25, 140, 60));
+            AppendLog($"接收服务已就绪 · 监听 [::]:{_config.TcpPort}（IPv4/IPv6 双栈）", Color.FromArgb(25, 140, 60));
         else
             AppendLog($"接收服务启动失败：{tcpError}（端口可能被占用，或已有飞鸽在运行）", Color.FromArgb(190, 40, 40));
 
-        if (udpError != null)
-            AppendLog($"设备发现启动失败：{udpError}", Color.FromArgb(190, 40, 40));
+        if (udpError == null)
+            AppendLog($"局域网自动发现已开启 · 广播端口 {_config.UdpPort}，同网段设备会自动出现在列表中", Color.FromArgb(25, 140, 60));
+        else
+            AppendLog($"局域网自动发现不可用：{udpError}（仍可用扫码配对）", Color.FromArgb(180, 130, 20));
 
-        AppendLog("右键在线设备发送文件；列表为空时右键空白处可用「手动输入 IP 直连」", Color.Gray);
-        AppendLog("若对方连得上却看不到本机，请确认 Windows 防火墙已允许本程序访问「专用网络」", Color.Gray);
+        AppendLog("跨网段或自动发现不到时，点「扫码添加设备」出示二维码配对", Color.Gray);
+        AppendLog("若对方扫码后连不上，请确认 Windows 防火墙已允许本程序访问「专用网络」", Color.Gray);
     }
 
     // ---------------- UI 构建 ----------------
@@ -122,6 +152,9 @@ public sealed class MainForm : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        // 布局完成后按真实条目数决定「空状态 / 列表」谁显示：
+        // 窗体句柄创建时 ListView 会被重新置为可见，必须在显示后校正一次。
+        UpdateDeviceEmptyState();
         ScrollLogToEnd();
     }
 
@@ -175,12 +208,12 @@ public sealed class MainForm : Form
         _nameBox.Font = new Font("微软雅黑", 12F);
         _nameBox.Visible = false;
 
-        _localInfo.Text = $"{_discovery.LocalIp}:{_config.TcpPort}   ·   协议 v1.0   ·   点击名称可修改";
+        _localInfo.Text = $"{_localIp}:{_config.TcpPort}   ·   广播发现 + 扫码配对   ·   点击名称可修改";
         _localInfo.ForeColor = Color.FromArgb(130, 138, 148);
         _localInfo.Font = new Font("微软雅黑", 9F);
         _localInfo.AutoSize = true;
 
-        _onlineDot.Text = "● 在线";
+        _onlineDot.Text = "● 接收就绪";
         _onlineDot.ForeColor = Color.FromArgb(32, 168, 72);
         _onlineDot.Font = new Font("微软雅黑", 10F, FontStyle.Bold);
         _onlineDot.AutoSize = true; // 不 Dock：AutoSize 才能保证「● 在线」不被裁成「● 在」
@@ -241,12 +274,17 @@ public sealed class MainForm : Form
     {
         var left = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2,
+            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4,
             Margin = new Padding(0, 0, 6, 0), Padding = Padding.Empty, BackColor = Color.White
         };
         left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
-        left.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));   // 标题
+        _entryRowStyle = new RowStyle(SizeType.Absolute, 40F);      // 唯一配对入口
+        left.RowStyles.Add(_entryRowStyle);
+        _pairRowStyle = new RowStyle(SizeType.Absolute, 0F);        // 点击后才展开
+        left.RowStyles.Add(_pairRowStyle);
+        left.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));   // 设备列表
+        _leftGrid = left;
 
         // 标题行也用 grid，避免 Width 计算导致副标题被裁
         var head = new TableLayoutPanel
@@ -259,7 +297,7 @@ public sealed class MainForm : Form
         head.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
         var titleLbl = new Label
         {
-            Text = "在线设备", Font = new Font("微软雅黑", 11F, FontStyle.Bold),
+            Text = "设备", Font = new Font("微软雅黑", 11F, FontStyle.Bold),
             ForeColor = Color.FromArgb(40, 46, 54), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft
         };
         var subLbl = new Label
@@ -272,6 +310,9 @@ public sealed class MainForm : Form
         head.Controls.Add(subLbl, 1, 0);
         left.Controls.Add(head, 0, 0);
 
+        left.Controls.Add(BuildPairEntry(), 0, 1);
+        left.Controls.Add(BuildPairPanel(), 0, 2);
+
         _devices.View = View.Details;
         _devices.FullRowSelect = true;
         _devices.MultiSelect = false;
@@ -280,17 +321,20 @@ public sealed class MainForm : Form
         _devices.BackColor = Color.White;
         _devices.Font = new Font("微软雅黑", 9.5F);
         _devices.HeaderStyle = ColumnHeaderStyle.Nonclickable;
+        _devices.ShowItemToolTips = true;   // IPv6 地址列会被截断，悬停看完整值
         _devices.ContextMenuStrip = _deviceMenu;
-        _devices.Columns.Add("设备名", 180);
-        _devices.Columns.Add("IP 地址", 140);
-        _devices.Columns.Add("端口", 70);
+        _devices.Columns.Add("设备名", 160);
+        _devices.Columns.Add("IP 地址", 130);
+        _devices.Columns.Add("端口", 54);
+        _devices.Columns.Add("状态", 62);
         _deviceMenu.Items.AddRange(new ToolStripItem[]
         {
-            _menuSend, _menuCopyIp, new ToolStripSeparator(), _menuOpenFolder, _menuManual, _menuRefresh
+            _menuSend, _menuCopyIp, new ToolStripSeparator(), _menuRemove, _menuRefresh,
+            new ToolStripSeparator(), _menuOpenFolder, _menuManual
         });
         _deviceMenu.Opening += DeviceMenu_Opening;
 
-        _emptyHint.Text = "暂无在线设备\n\n启动手机 App 或另一台电脑，稍候将自动出现在此处";
+        _emptyHint.Text = "暂无设备\n\n同网段设备会自动出现；跨网段请点上方「扫码添加设备」";
         _emptyHint.TextAlign = ContentAlignment.MiddleCenter;
         _emptyHint.ForeColor = Color.FromArgb(165, 170, 178);
         _emptyHint.Font = new Font("微软雅黑", 10F);
@@ -303,19 +347,161 @@ public sealed class MainForm : Form
         // 空白处右键也能出菜单，「手动输入 IP 直连」不会因为列表为空而不可用
         listHost.ContextMenuStrip = _deviceMenu;
         _emptyHint.ContextMenuStrip = _deviceMenu;
-        left.Controls.Add(listHost, 0, 1);
+        left.Controls.Add(listHost, 0, 3);
 
         // 列宽按列表实际宽度分配（用 SizeChanged 而不是窗体 Resize，避免拿到未布局的宽度）
         void FitColumns()
         {
             int w = Math.Max(_devices.ClientSize.Width - 4, 200);
-            _devices.Columns[0].Width = (int)(w * 0.48);
-            _devices.Columns[1].Width = (int)(w * 0.36);
-            _devices.Columns[2].Width = w - _devices.Columns[0].Width - _devices.Columns[1].Width;
+            var portW = D(54);
+            var stateW = D(104);
+            _devices.Columns[0].Width = (int)((w - portW - stateW) * 0.55);
+            _devices.Columns[1].Width = w - portW - stateW - _devices.Columns[0].Width;
+            _devices.Columns[2].Width = portW;
+            _devices.Columns[3].Width = stateW;
         }
         _devices.SizeChanged += (_, _) => FitColumns();
         FitColumns();
         return left;
+    }
+
+    /// <summary>默认态唯一的配对入口：整行只有一个按钮。</summary>
+    private Control BuildPairEntry()
+    {
+        var host = new Panel
+        {
+            Dock = DockStyle.Fill, BackColor = Color.White,
+            Padding = new Padding(14, 0, 14, 6)
+        };
+
+        _addDeviceBtn.Text = "＋   扫码添加设备";
+        _addDeviceBtn.Dock = DockStyle.Fill;
+        _addDeviceBtn.FlatStyle = FlatStyle.Flat;
+        _addDeviceBtn.FlatAppearance.BorderColor = Color.FromArgb(210, 217, 227);
+        _addDeviceBtn.FlatAppearance.BorderSize = 1;
+        _addDeviceBtn.BackColor = Color.FromArgb(247, 249, 252);
+        _addDeviceBtn.ForeColor = Color.FromArgb(30, 111, 217);
+        _addDeviceBtn.Font = new Font("微软雅黑", 9.5F);
+        _addDeviceBtn.TextAlign = ContentAlignment.MiddleLeft;
+        _addDeviceBtn.Padding = new Padding(10, 0, 0, 0);
+        _addDeviceBtn.Cursor = Cursors.Hand;
+        _tip.SetToolTip(_addDeviceBtn, "出示二维码，让对方扫码添加这台设备");
+
+        host.Controls.Add(_addDeviceBtn);
+        return host;
+    }
+
+    /// <summary>展开态：二维码 + 倒计时 + 刷新 + 收起。所有控件初始可见但父面板隐藏。</summary>
+    private Control BuildPairPanel()
+    {
+        _pairPanel.Dock = DockStyle.Fill;
+        _pairPanel.Visible = false;
+        _pairPanel.BackColor = Color.White;
+        _pairPanel.Padding = new Padding(14, 0, 14, 8);
+
+        var grid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2,
+            Margin = Padding.Empty, Padding = Padding.Empty, BackColor = Color.White
+        };
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 24F));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+        grid.Controls.Add(new Label
+        {
+            Text = "扫码添加设备", Font = new Font("微软雅黑", 10.5F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(40, 46, 54), Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft
+        }, 0, 0);
+
+        _collapseQr.Text = "收起";
+        _collapseQr.AutoSize = true;
+        _collapseQr.FlatStyle = FlatStyle.Flat;
+        _collapseQr.FlatAppearance.BorderSize = 0;
+        _collapseQr.BackColor = Color.Transparent;
+        _collapseQr.ForeColor = Color.FromArgb(120, 128, 138);
+        _collapseQr.Font = new Font("微软雅黑", 8.5F);
+        _collapseQr.Cursor = Cursors.Hand;
+        _collapseQr.Anchor = AnchorStyles.Right;
+        _collapseQr.Margin = new Padding(0, 2, 0, 0);
+        grid.Controls.Add(_collapseQr, 1, 0);
+
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
+            Margin = Padding.Empty, Padding = Padding.Empty, BackColor = Color.White
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96F));
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+
+        _qrBox.Dock = DockStyle.Fill;
+        _qrBox.SizeMode = PictureBoxSizeMode.Zoom;
+        _qrBox.BackColor = Color.White;
+        _qrBox.BorderStyle = BorderStyle.FixedSingle;
+        _qrBox.Margin = new Padding(0, 2, 10, 0);
+        content.Controls.Add(_qrBox, 0, 0);
+
+        var right = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4,
+            Margin = Padding.Empty, Padding = Padding.Empty, BackColor = Color.White
+        };
+        right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        right.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // 剩余时间
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 6F));  // 时间条
+        right.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); // 地址
+        right.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // 刷新
+
+        _expiryLabel.Text = "剩余 10:00";
+        _expiryLabel.Font = new Font("微软雅黑", 10.5F, FontStyle.Bold);
+        _expiryLabel.ForeColor = Color.FromArgb(30, 111, 217);
+        _expiryLabel.AutoSize = true;
+        _expiryLabel.Margin = new Padding(0, 0, 0, 4);
+        right.Controls.Add(_expiryLabel, 0, 0);
+
+        // 自绘细条：系统 ProgressBar 在浅色主题下是绿色且无法改色，与设计色板不一致
+        _expiryTrack.Dock = DockStyle.Fill;
+        _expiryTrack.BackColor = Color.FromArgb(232, 235, 240);
+        _expiryTrack.Margin = new Padding(0, 0, 0, 6);
+        _expiryTrack.Paint += (_, e) =>
+        {
+            var w = (int)Math.Round(_expiryTrack.ClientSize.Width * _expiryFraction);
+            if (w <= 0) return;
+            using var brush = new SolidBrush(_expiryColor);
+            e.Graphics.FillRectangle(brush, 0, 0, w, _expiryTrack.ClientSize.Height);
+        };
+        right.Controls.Add(_expiryTrack, 0, 1);
+
+        _pairAddr.Text = "";
+        _pairAddr.Font = new Font("Consolas", 8F);
+        _pairAddr.ForeColor = Color.FromArgb(136, 136, 136);
+        _pairAddr.Dock = DockStyle.Fill;
+        _pairAddr.AutoSize = false;
+        _pairAddr.AutoEllipsis = true;
+        _pairAddr.TextAlign = ContentAlignment.MiddleLeft;
+        _pairAddr.Margin = Padding.Empty;
+        right.Controls.Add(_pairAddr, 0, 2);
+
+        _refreshQr.Text = "刷新二维码";
+        _refreshQr.AutoSize = true;
+        _refreshQr.FlatStyle = FlatStyle.Flat;
+        _refreshQr.FlatAppearance.BorderColor = Color.FromArgb(210, 217, 227);
+        _refreshQr.FlatAppearance.BorderSize = 1;
+        _refreshQr.BackColor = Color.White;
+        _refreshQr.ForeColor = Color.FromArgb(30, 111, 217);
+        _refreshQr.Font = new Font("微软雅黑", 8.5F);
+        _refreshQr.Padding = new Padding(10, 4, 10, 4);
+        _refreshQr.Cursor = Cursors.Hand;
+        _refreshQr.Margin = new Padding(0, 4, 0, 0);
+        right.Controls.Add(_refreshQr, 0, 3);
+
+        content.Controls.Add(right, 1, 0);
+        grid.Controls.Add(content, 0, 1);
+        grid.SetColumnSpan(content, 2);
+        _pairPanel.Controls.Add(grid);
+        return _pairPanel;
     }
 
     private Control BuildRight()
@@ -443,7 +629,7 @@ public sealed class MainForm : Form
     {
         var bottom = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Margin = Padding.Empty, Padding = new Padding(20, 10, 20, 8) };
         _progressLabel.Dock = DockStyle.Fill;
-        _progressLabel.Text = "就绪  ·  右键在线设备即可发送文件";
+        _progressLabel.Text = "就绪  ·  同网段设备自动发现，右键设备即可发送文件";
         _progressLabel.ForeColor = Color.FromArgb(110, 118, 128);
         _progressLabel.Font = new Font("微软雅黑", 9F);
         _progress.Dock = DockStyle.Bottom;
@@ -475,56 +661,26 @@ public sealed class MainForm : Form
                 AppendLog($"已复制 IP：{_menuTarget.Ip}", Color.Gray);
             }
         };
+        _menuRemove.Click += (_, _) => RemoveSelectedPeer();
         _menuRefresh.Click += (_, _) =>
         {
             _discovery.BroadcastOnce();
-            AppendLog("已重新广播本机信息", Color.FromArgb(180, 130, 20));
+            AppendLog("已重新广播本机信息，等待同网段设备回应", Color.FromArgb(180, 130, 20));
         };
         _menuManual.Click += (_, _) => ManualSendAsync().FireAndForget();
 
-        _discovery.PeerChanged += (peer, change) => Ui(() =>
-        {
-            var existing = FindItem(peer.Key);
-            switch (change)
-            {
-                case PeerChange.Added:
-                    if (existing == null)
-                    {
-                        _devices.Items.Add(new ListViewItem(new[] { peer.Name, peer.Ip, peer.TcpPort.ToString() }) { Tag = peer });
-                        AppendLog($"发现设备：{peer.Name} ({peer.Ip})", Color.FromArgb(180, 130, 20));
-                    }
-                    else
-                    {
-                        existing.SubItems[0].Text = peer.Name;
-                        existing.Tag = peer;
-                    }
-                    break;
+        // 配对入口：默认收起，点击才生成 token 并展开二维码
+        _addDeviceBtn.Click += (_, _) => ExpandPairPanel();
+        _collapseQr.Click += (_, _) => CollapsePairPanel();
+        _refreshQr.Click += (_, _) => RefreshPairing();
+        _pairTimer.Tick += (_, _) => UpdatePairCountdown();
+        _transfer.ConfirmPair += ConfirmPairAsync;
+        _transfer.PeerPaired += OnPeerPaired;
 
-                case PeerChange.Updated:
-                    // 周期性广播只是刷新，绝不能删行（这正是「设备上线就消失」的根因）
-                    if (existing != null)
-                    {
-                        existing.SubItems[0].Text = peer.Name;
-                        existing.SubItems[1].Text = peer.Ip;
-                        existing.SubItems[2].Text = peer.TcpPort.ToString();
-                        existing.Tag = peer;
-                    }
-                    break;
-
-                case PeerChange.Removed:
-                    if (existing != null)
-                    {
-                        _devices.Items.Remove(existing);
-                        AppendLog($"设备离线：{peer.Name}", Color.FromArgb(180, 130, 20));
-                    }
-                    break;
-            }
-            // 空状态与列表互斥显示：透明标签叠在 ListView 上在部分环境画不出来
-            _emptyHint.Visible = _devices.Items.Count == 0;
-            _devices.Visible = !_emptyHint.Visible;
-        });
-
+        // 局域网自动发现：与扫码配对写入同一个列表
+        _discovery.PeerChanged += (peer, change) => Ui(() => OnLanPeerChanged(peer, change));
         _discovery.Diag += msg => Ui(() => AppendLogDiag(msg));
+
         _transfer.Log += msg => Ui(() => AppendLog(msg, Color.FromArgb(40, 40, 40)));
         _transfer.ConfirmReceive += ConfirmReceiveAsync;
         _transfer.Progress += (dir, name, done, total) => Ui(() =>
@@ -555,6 +711,7 @@ public sealed class MainForm : Form
         _menuOpenFolder.Click += (_, _) => OpenReceiveFolder();
 
         RefreshRecent();
+        UpdateDeviceEmptyState();
 
         FormClosing += (_, e) =>
         {
@@ -567,7 +724,9 @@ public sealed class MainForm : Form
             }
             _tray.Visible = false;
             _tray.Dispose();
-            _discovery.Dispose();
+            _pairTimer.Stop();
+            _pairTimer.Dispose();
+            _discovery.Dispose();   // 会先发一个 BYE，让对方立刻把本机从列表里摘掉
             _transfer.Dispose();
         };
     }
@@ -601,6 +760,373 @@ public sealed class MainForm : Form
         return tcs.Task;
     }
 
+    // ---------------- 二维码配对 ----------------
+
+    /// <summary>展开唯一入口：此刻才生成 token / 二维码，10 分钟从这一刻起算。</summary>
+    private void ExpandPairPanel()
+    {
+        if (_pairExpanded) return;
+
+        _localIp = AppConfig.GetLocalIp();
+        _localInfo.Text = $"{_localIp}:{_config.TcpPort}   ·   广播发现 + 扫码配对   ·   点击名称可修改";
+
+        var session = _transfer.BeginPairing();
+        _pairExpanded = true;
+        _addDeviceBtn.Visible = false;
+        if (_entryRowStyle != null) _entryRowStyle.Height = 0F;
+        if (_pairRowStyle != null) _pairRowStyle.Height = D(158);
+        _pairPanel.Visible = true;
+
+        _pairAddr.Text = $"{_localIp}:{_config.TcpPort}";
+        _tip.SetToolTip(_pairAddr, $"{_localIp}:{_config.TcpPort}");
+        _refreshQr.Text = "刷新二维码";
+        SetExpiryProgress(1, Color.FromArgb(30, 111, 217));
+        _expiryLabel.ForeColor = Color.FromArgb(30, 111, 217);
+        RenderQr(session);
+        _pairTimer.Start();
+        UpdatePairCountdown();
+        _leftGrid?.PerformLayout();
+
+        AppendLog("已生成配对二维码（10 分钟有效），等待对方扫码…", Color.FromArgb(25, 100, 180));
+    }
+
+    /// <summary>刷新 = 立即作废旧 token 并生成新码。</summary>
+    private void RefreshPairing()
+    {
+        if (!_pairExpanded)
+        {
+            ExpandPairPanel();
+            return;
+        }
+
+        _localIp = AppConfig.GetLocalIp();
+        var session = _transfer.BeginPairing();
+        RenderQr(session);
+        _pairAddr.Text = $"{_localIp}:{_config.TcpPort}";
+        _tip.SetToolTip(_pairAddr, $"{_localIp}:{_config.TcpPort}");
+        _expiryLabel.ForeColor = Color.FromArgb(30, 111, 217);
+        _refreshQr.Text = "刷新二维码";
+        SetExpiryProgress(1, Color.FromArgb(30, 111, 217));
+        _pairTimer.Start();
+        UpdatePairCountdown();
+        AppendLog("二维码已刷新，旧码立即失效", Color.FromArgb(180, 130, 20));
+    }
+
+    /// <summary>收起 = 作废 token，回到「只有一个入口」的默认态。</summary>
+    private void CollapsePairPanel(bool silent = false)
+    {
+        if (!_pairExpanded) return;
+        _pairExpanded = false;
+        _pairTimer.Stop();
+        _transfer.CancelPairing();
+
+        _pairPanel.Visible = false;
+        if (_pairRowStyle != null) _pairRowStyle.Height = 0F;
+        if (_entryRowStyle != null) _entryRowStyle.Height = D(40);
+        _addDeviceBtn.Visible = true;
+
+        if (_qrBox.Image != null)
+        {
+            _qrBox.Image.Dispose();
+            _qrBox.Image = null;
+        }
+        SetExpiryProgress(0, Color.FromArgb(30, 111, 217));
+        _leftGrid?.PerformLayout();
+
+        if (!silent) AppendLog("已收起二维码，旧码立即失效", Color.Gray);
+    }
+
+    private void UpdatePairCountdown()
+    {
+        if (!_pairExpanded) return;
+        var session = _transfer.CurrentSession;
+        if (session == null)
+        {
+            CollapsePairPanel(silent: true);
+            return;
+        }
+
+        var left = session.Remaining;
+        if (left <= TimeSpan.Zero)
+        {
+            _pairTimer.Stop();
+            _expiryLabel.Text = "二维码已过期";
+            _expiryLabel.ForeColor = Color.FromArgb(198, 40, 40);
+            SetExpiryProgress(0, Color.FromArgb(198, 40, 40));
+            _refreshQr.Text = "重新生成";
+            AppendLog("配对二维码已过期，点「重新生成」获取新码", Color.FromArgb(180, 130, 20));
+            return;
+        }
+
+        _expiryLabel.Text = $"剩余 {(int)left.TotalMinutes:00}:{left.Seconds:00}";
+        _expiryLabel.ForeColor = left.TotalSeconds <= 60
+            ? Color.FromArgb(184, 134, 11)
+            : Color.FromArgb(30, 111, 217);
+        SetExpiryProgress(
+            left.TotalSeconds / 600.0,
+            left.TotalSeconds <= 60 ? Color.FromArgb(184, 134, 11) : Color.FromArgb(30, 111, 217));
+    }
+
+    private void SetExpiryProgress(double fraction, Color color)
+    {
+        _expiryFraction = Math.Clamp(fraction, 0, 1);
+        _expiryColor = color;
+        _expiryTrack.Invalidate();
+    }
+
+    private void RenderQr(PairSession session)
+    {
+        var payload = Protocol.BuildQrPayload(_config.DeviceName, _localIp, _config.TcpPort, session.Token);
+        var png = QrCode.RenderPng(payload);
+        if (png == null)
+        {
+            AppendLog("二维码生成失败，请点「刷新二维码」重试", Color.FromArgb(190, 40, 40));
+            return;
+        }
+
+        using var ms = new MemoryStream(png);
+        using var tmp = Image.FromStream(ms);
+        var image = new Bitmap(tmp);
+        var old = _qrBox.Image;
+        _qrBox.Image = image;
+        old?.Dispose();
+    }
+
+    /// <summary>收到 FG_HELLO：在 UI 线程弹窗确认对方身份，用户允许才回 OK。</summary>
+    private Task<bool> ConfirmPairAsync(PairRequest req)
+    {
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Ui(() =>
+        {
+            try
+            {
+                if (!Visible) ShowFromTray();
+                if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+                Activate();
+                using var dlg = new PairConfirmDialog(req) { Owner = this };
+                var accept = dlg.ShowDialog(this) == DialogResult.OK;
+                AppendLog(accept
+                    ? $"已允许配对：{req.PeerName}（{req.Address}）"
+                    : $"已拒绝配对：{req.PeerName}（已通知对方）",
+                    accept ? Color.FromArgb(25, 140, 60) : Color.FromArgb(190, 40, 40));
+                tcs.TrySetResult(accept);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"配对确认框异常：{ex.Message}", Color.FromArgb(190, 40, 40));
+                tcs.TrySetResult(false);
+            }
+        });
+        return tcs.Task;
+    }
+
+    private void OnPeerPaired(Peer peer)
+    {
+        Ui(() =>
+        {
+            MergePairedPeer(peer);
+            AppendLog($"✓ 配对成功：{peer.Name}（{peer.Address}）已加入设备列表", Color.FromArgb(25, 140, 60));
+            _progressLabel.Text = $"已与 {peer.Name} 配对 · 右键设备即可发送文件";
+
+            // 让「已连接」状态短暂可见，然后自动收起回默认的单一入口
+            var timer = new System.Windows.Forms.Timer { Interval = 1500 };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                timer.Dispose();
+                if (!IsDisposed) CollapsePairPanel(silent: true);
+            };
+            timer.Start();
+        });
+    }
+
+    // ---------------- 设备列表：局域网发现 + 扫码配对，两路来源合一 ----------------
+
+    /// <summary>列表行里显示的状态文案：区分来源，配对过的优先显示配对状态。</summary>
+    private static string StatusOf(Peer p)
+    {
+        if (p.JustPaired) return "刚配对";
+        if (p.IsPaired && p.IsLan) return "已配对·在线";
+        if (p.IsPaired) return "已配对";
+        return "在线";
+    }
+
+    private static Color ColorOf(Peer p) =>
+        p.IsPaired ? Color.FromArgb(30, 100, 180) : Color.FromArgb(40, 46, 54);
+
+    /// <summary>
+    /// 局域网广播事件。关键点：同一台设备可能既配对过、又在广播，
+    /// 这时必须合并成一行（沿用配对时的地址，IPv6 优先），不能出现两行。
+    /// </summary>
+    private void OnLanPeerChanged(Peer lan, PeerChange change)
+    {
+        if (change == PeerChange.Removed)
+        {
+            // BYE 或超时：配对过的行保留，只把状态改回「已配对」；纯局域网来源才删行
+            var row = _peers.TryGetValue(lan.Key, out var exact) ? exact : FindPairedTwin(lan);
+            if (row == null) return;
+            row.IsLan = false;
+            if (row.IsPaired)
+            {
+                RenderPeerRow(row);
+                AppendLog($"设备离线：{row.Name}（仍保留在已配对列表）", Color.FromArgb(180, 130, 20));
+            }
+            else
+            {
+                RemovePeerRow(row.Key);
+                AppendLog($"设备离线：{row.Name}", Color.FromArgb(180, 130, 20));
+            }
+            return;
+        }
+
+        var twin = FindPairedTwin(lan);
+        if (twin != null)
+        {
+            var wasOnline = twin.IsLan;
+            twin.IsLan = true;
+            twin.LastSeen = DateTime.Now;
+            RenderPeerRow(twin);
+            if (!wasOnline && change == PeerChange.Added)
+                AppendLog($"设备在线：{twin.Name}（局域网已发现）", Color.FromArgb(25, 140, 60));
+            return;
+        }
+
+        if (_peers.TryGetValue(lan.Key, out var slot))
+        {
+            var wasOnline = slot.IsLan;
+            slot.Name = lan.Name;
+            slot.Ip = lan.Ip;
+            slot.TcpPort = lan.TcpPort;
+            slot.LastSeen = DateTime.Now;
+            slot.IsLan = true;
+            RenderPeerRow(slot);
+            if (!wasOnline) AppendLog($"设备上线：{slot.Name}（{slot.Ip}）", Color.FromArgb(25, 140, 60));
+        }
+        else
+        {
+            lan.IsLan = true;
+            lan.LastSeen = DateTime.Now;
+            _peers[lan.Key] = lan;
+            AddPeerRow(lan);
+            AppendLog($"发现设备：{lan.Name}（{lan.Ip}）", Color.FromArgb(180, 130, 20));
+        }
+    }
+
+    /// <summary>
+    /// 找「同一台设备」的已配对行：名字与端口都相同。
+    /// 只有在同名的已配对设备恰好一台时才合并——两台同名手机（同型号默认名）不会被错误并成一行。
+    /// </summary>
+    private Peer? FindPairedTwin(Peer other)
+    {
+        var name = other.Name.Trim();
+        var matches = _peers.Values
+            .Where(p => p.IsPaired && p.TcpPort == other.TcpPort &&
+                        string.Equals(p.Name.Trim(), name, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        return matches.Count == 1 ? matches[0] : null;
+    }
+
+    /// <summary>扫码配对成功后的入列。</summary>
+    private void MergePairedPeer(Peer peer)
+    {
+        peer.IsPaired = true;
+        peer.JustPaired = true;
+
+        // 之前由广播发现的同名同端口行并进来，避免同一台设备两行
+        var lanTwin = _peers.Values.FirstOrDefault(p =>
+            !p.IsPaired && p.TcpPort == peer.TcpPort &&
+            string.Equals(p.Name.Trim(), peer.Name.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (lanTwin != null)
+        {
+            peer.IsLan = lanTwin.IsLan;
+            _peers.Remove(lanTwin.Key);
+            RemovePeerRow(lanTwin.Key);
+        }
+
+        _peers[peer.Key] = peer;
+        if (FindItem(peer.Key) == null) AddPeerRow(peer, select: true);
+        else RenderPeerRow(peer, select: true);
+
+        // 「刚配对」只是短暂提示，5 秒后回到普通状态，避免状态列一直停在刚配对
+        var badge = new System.Windows.Forms.Timer { Interval = 5000 };
+        badge.Tick += (_, _) =>
+        {
+            badge.Stop();
+            badge.Dispose();
+            if (peer.JustPaired && !IsDisposed)
+            {
+                peer.JustPaired = false;
+                RenderPeerRow(peer);
+            }
+        };
+        badge.Start();
+    }
+
+    private void AddPeerRow(Peer peer, bool select = false)
+    {
+        var item = new ListViewItem(new[] { peer.Name, peer.Ip, peer.TcpPort.ToString(), StatusOf(peer) })
+        {
+            Tag = peer,
+            ForeColor = ColorOf(peer),
+            ToolTipText = $"{peer.Name}\n{peer.Address}"
+        };
+        // 配对行置顶，局域网行按发现顺序追加，避免每 2 秒广播把列表抖来抖去
+        if (peer.IsPaired) _devices.Items.Insert(0, item);
+        else _devices.Items.Add(item);
+        if (select)
+        {
+            item.Selected = true;
+            item.EnsureVisible();
+        }
+        UpdateDeviceEmptyState();
+    }
+
+    private void RenderPeerRow(Peer peer, bool select = false)
+    {
+        var item = FindItem(peer.Key);
+        if (item == null) { AddPeerRow(peer, select); return; }
+        item.SubItems[0].Text = peer.Name;
+        item.SubItems[1].Text = peer.Ip;
+        item.SubItems[2].Text = peer.TcpPort.ToString();
+        item.SubItems[3].Text = StatusOf(peer);
+        item.Tag = peer;
+        item.ToolTipText = $"{peer.Name}\n{peer.Address}";
+        item.ForeColor = ColorOf(peer);
+        if (select) { item.Selected = true; item.EnsureVisible(); }
+        UpdateDeviceEmptyState();
+    }
+
+    private void RemovePeerRow(string key)
+    {
+        var item = FindItem(key);
+        if (item != null) _devices.Items.Remove(item);
+        _peers.Remove(key);
+        UpdateDeviceEmptyState();
+    }
+
+    private void UpdateDeviceEmptyState()
+    {
+        _emptyHint.Visible = _devices.Items.Count == 0;
+        _devices.Visible = !_emptyHint.Visible;
+    }
+
+    private void RemoveSelectedPeer()
+    {
+        if (_devices.SelectedItems.Count == 0) return;
+        var item = _devices.SelectedItems[0];
+        var peer = item.Tag as Peer;
+        var name = peer?.Name ?? item.SubItems[0].Text;
+        var addr = peer?.Address ?? item.SubItems[1].Text;
+        _devices.Items.Remove(item);
+        if (peer != null) _peers.Remove(peer.Key);
+        UpdateDeviceEmptyState();
+        // 局域网来源的设备下一轮广播还会回来，说明清楚免得用户以为没生效
+        if (peer != null && !peer.IsPaired)
+            AppendLog($"已从列表移除：{name}（{addr}）· 仍在局域网广播时会被重新发现", Color.Gray);
+        else if (peer != null)
+            AppendLog($"已从列表移除：{name}（{addr}）· 需要重新扫码才能再加回来", Color.Gray);
+    }
+
     private void DeviceMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         // 列表为空时不再取消菜单——否则「手动输入 IP 直连」永远点不到
@@ -608,7 +1134,10 @@ public sealed class MainForm : Form
         _menuTarget = sel;
         _menuSend.Enabled = sel != null;
         _menuCopyIp.Enabled = sel != null;
+        _menuRemove.Enabled = sel != null;
         _menuSend.Text = sel != null ? $"发送文件到 {sel.Name}…" : "发送文件（先选中设备）";
+        _menuRemove.Text = sel != null ? $"从列表移除 {sel.Name}" : "从列表移除";
+        _menuRefresh.Enabled = true;
     }
 
     private async Task SendFromMenuAsync()
@@ -622,9 +1151,9 @@ public sealed class MainForm : Form
 
     private async Task ManualSendAsync()
     {
-        using var ipDlg = new InputDialog("手动直连", "输入对方电脑/手机的局域网 IP 地址：", _menuTarget?.Ip ?? "") { Owner = this };
+        using var ipDlg = new InputDialog("手动直连", "输入对方电脑/手机 IP（支持 IPv6，可带 %网卡序号）：", _menuTarget?.Ip ?? "") { Owner = this };
         if (ipDlg.ShowDialog(this) != DialogResult.OK) return;
-        var ip = ipDlg.Value.Trim();
+        var ip = ipDlg.Value.Trim().Trim('[', ']');
         if (string.IsNullOrWhiteSpace(ip)) return;
         if (!System.Net.IPAddress.TryParse(ip, out _))
         {
@@ -672,11 +1201,12 @@ public sealed class MainForm : Form
         if (newName.Length == 0) newName = Environment.MachineName;
         _config.DeviceName = newName;
         _config.Save();
-        _discovery.SetDeviceName(newName);
         _nameLabel.Text = newName;
         _nameBox.Visible = false;
         _nameLabel.Visible = true;
-        AppendLog($"设备名已改为「{newName}」，已通知局域网", Color.FromArgb(180, 130, 20));
+        // 立刻广播一次新名字，同网段的设备不用等下一轮 2 秒广播
+        try { _discovery.SetDeviceName(newName); } catch { }
+        AppendLog($"设备名已改为「{newName}」", Color.FromArgb(180, 130, 20));
     }
 
     private ListViewItem? FindItem(string key) =>
@@ -817,6 +1347,16 @@ public sealed class MainForm : Form
         }
     }
 
+    /// <summary>发现通道的诊断日志：同一句 8 秒内只记一次，否则每 2 秒一条会刷屏。</summary>
+    private void AppendLogDiag(string msg)
+    {
+        var now = DateTime.Now;
+        if (msg == _lastDiag && (now - _lastDiagTime).TotalSeconds < 8) return;
+        _lastDiag = msg;
+        _lastDiagTime = now;
+        AppendLog("· " + msg, Color.FromArgb(160, 165, 172));
+    }
+
     private void AppendLog(string msg, Color color)
     {
         Ui(() =>
@@ -830,18 +1370,6 @@ public sealed class MainForm : Form
             _log.AppendText($"[{now:HH:mm:ss}] {msg}{Environment.NewLine}");
             ScrollLogToEnd();
         });
-    }
-
-    // 发现诊断日志：相同内容 8 秒内只记一次，避免周期性广播刷屏
-    private string _lastDiag = "";
-    private DateTime _lastDiagTime = DateTime.MinValue;
-    private void AppendLogDiag(string msg)
-    {
-        var now = DateTime.Now;
-        if (msg == _lastDiag && (now - _lastDiagTime).TotalSeconds < 8) return;
-        _lastDiag = msg;
-        _lastDiagTime = now;
-        AppendLog("· " + msg, Color.FromArgb(160, 165, 172));
     }
 
     private void Ui(Action action)
@@ -1086,6 +1614,133 @@ internal sealed class ReceiveConfirmDialog : Form
         foreach (var c in name) sb.Append(Array.IndexOf(invalid, c) >= 0 ? '_' : c);
         var s = sb.ToString().Trim().Trim('.');
         return s.Length == 0 ? "received_file" : s;
+    }
+}
+
+/// <summary>
+/// 配对确认框：收到 FG_HELLO 后显示对方设备名与地址，用户点「允许配对」才建立信任。
+/// 与「是否接收这个文件」是两层独立确认。
+/// </summary>
+internal sealed class PairConfirmDialog : Form
+{
+    private const int TextWidth = 420;
+
+    public PairConfirmDialog(PairRequest req)
+    {
+        Text = "设备请求配对";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterScreen;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = true;
+        TopMost = true;
+        BackColor = Color.White;
+        Font = new Font("微软雅黑", 9.5F);
+        AutoScaleMode = AutoScaleMode.None;
+        AutoSize = false;
+
+        var body = new TableLayoutPanel
+        {
+            ColumnCount = 1,
+            RowCount = 5,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Fill,
+            Padding = new Padding(24, 20, 24, 18),
+            BackColor = Color.White
+        };
+        body.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (var i = 0; i < 5; i++) body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        body.Controls.Add(new Label
+        {
+            Text = "设备请求配对",
+            Font = new Font("微软雅黑", 13F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(28, 32, 38),
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 8)
+        }, 0, 0);
+
+        body.Controls.Add(new Label
+        {
+            Text = req.PeerName,
+            Font = new Font("微软雅黑", 12F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(30, 100, 180),
+            AutoSize = true,
+            MaximumSize = new Size(TextWidth, 0),
+            Margin = new Padding(0, 0, 0, 4)
+        }, 0, 1);
+
+        body.Controls.Add(new Label
+        {
+            Text = $"{req.Address}\n\n配对后这台设备会加入你的设备列表，之后可从列表右键给它发送文件。",
+            ForeColor = Color.FromArgb(110, 118, 128),
+            AutoSize = true,
+            MaximumSize = new Size(TextWidth, 0),
+            Margin = new Padding(0, 0, 0, 14)
+        }, 0, 2);
+
+        body.Controls.Add(new Label
+        {
+            Text = "30 秒内未操作将自动拒绝并通知对方",
+            ForeColor = Color.FromArgb(170, 135, 40),
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 14)
+        }, 0, 3);
+
+        var btnFont = new Font("微软雅黑", 9.5F);
+        var allowFont = new Font("微软雅黑", 9.5F, FontStyle.Bold);
+        var btnHeight = Math.Max(34, TextRenderer.MeasureText("允许配对", allowFont).Height + 14);
+        var allowSize = new Size(TextRenderer.MeasureText("允许配对", allowFont).Width + 40, btnHeight);
+        var denySize = new Size(TextRenderer.MeasureText("拒绝", btnFont).Width + 40, btnHeight);
+
+        var allowBtn = new Button
+        {
+            Text = "允许配对",
+            Size = allowSize,
+            BackColor = Color.FromArgb(30, 111, 217),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+            Font = allowFont,
+            Cursor = Cursors.Hand,
+            DialogResult = DialogResult.OK,
+            Margin = new Padding(8, 0, 0, 0)
+        };
+        allowBtn.FlatAppearance.BorderSize = 0;
+
+        var denyBtn = new Button
+        {
+            Text = "拒绝",
+            Size = denySize,
+            BackColor = Color.FromArgb(245, 246, 248),
+            ForeColor = Color.FromArgb(70, 78, 88),
+            FlatStyle = FlatStyle.Flat,
+            Font = btnFont,
+            Cursor = Cursors.Hand,
+            DialogResult = DialogResult.Cancel,
+            Margin = Padding.Empty
+        };
+        denyBtn.FlatAppearance.BorderColor = Color.FromArgb(214, 220, 228);
+
+        var btns = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.RightToLeft,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            Anchor = AnchorStyles.Right,
+            Margin = Padding.Empty
+        };
+        btns.Controls.Add(allowBtn);
+        btns.Controls.Add(denyBtn);
+        body.Controls.Add(btns, 0, 4);
+
+        Controls.Add(body);
+        AcceptButton = allowBtn;
+        CancelButton = denyBtn;
+
+        var wanted = body.PreferredSize;
+        ClientSize = new Size(Math.Max(440, wanted.Width), wanted.Height);
     }
 }
 

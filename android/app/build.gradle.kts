@@ -12,8 +12,8 @@ android {
         applicationId = "com.gelandesprung.ipfile"
         minSdk = 24
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.5"
+        versionCode = 7
+        versionName = "2.0"
     }
 
     buildTypes {
@@ -49,6 +49,10 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // 二维码：ZXing core 负责生成，journeyapps 提供扫码 Activity
+    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

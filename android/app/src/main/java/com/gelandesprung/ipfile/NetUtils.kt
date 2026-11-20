@@ -11,6 +11,7 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.io.OutputStream
 import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.NetworkInterface
 
 object NetUtils {
@@ -41,32 +42,72 @@ object NetUtils {
         else -> "application/octet-stream"
     }
 
-    /** 取本机局域网 IPv4（跳过回环/虚拟网卡）。 */
+    /**
+     * 取本机最可能被对端访问的地址：全局 IPv6 → 唯一本地 IPv6（fdxx）→ IPv4。
+     * 跳过回环、链路本地 fe80::（对方无法凭 scope 选网卡）与虚拟网卡。
+     */
     fun localIp(): String {
+        val v6 = mutableListOf<Pair<Int, String>>()
+        val v4 = mutableListOf<String>()
         try {
             val ifaces = NetworkInterface.getNetworkInterfaces() ?: return "127.0.0.1"
             for (ni in ifaces) {
                 if (!ni.isUp || ni.isLoopback || ni.isVirtual) continue
                 val n = ni.name.lowercase()
-                if (n.contains("wlan") || n.contains("eth") || n.contains("ap")) {
-                    val addrs = ni.inetAddresses
-                    while (addrs.hasMoreElements()) {
-                        val a = addrs.nextElement()
-                        if (a is Inet4Address && !a.isLoopbackAddress) return a.hostAddress ?: continue
-                    }
-                }
-            }
-            // 兜底：任意非回环 IPv4
-            for (ni in NetworkInterface.getNetworkInterfaces()) {
-                if (!ni.isUp || ni.isLoopback) continue
+                val preferredIface = n.contains("wlan") || n.contains("wifi") ||
+                    n.contains("eth") || n.contains("ap") || n.contains("rmnet")
+
                 val addrs = ni.inetAddresses
                 while (addrs.hasMoreElements()) {
                     val a = addrs.nextElement()
-                    if (a is Inet4Address && !a.isLoopbackAddress) return a.hostAddress ?: continue
+                    if (a.isLoopbackAddress || a.isAnyLocalAddress || a.isMulticastAddress) continue
+
+                    if (a is Inet6Address) {
+                        if (a.isLinkLocalAddress || a.isSiteLocalAddress) continue
+                        val b = a.address
+                        val global = (b[0].toInt() and 0xE0) == 0x20   // 2000::/3
+                        val ula = (b[0].toInt() and 0xFE) == 0xFC      // fc00::/7
+                        if (!global && !ula) continue
+                        val ip = a.hostAddress ?: continue
+                        var score = if (global) 100 else 50
+                        if (preferredIface) score += 10
+                        v6.add(score to ip)
+                    } else if (a is Inet4Address) {
+                        val ip = a.hostAddress ?: continue
+                        if (preferredIface) v4.add(0, ip) else v4.add(ip)
+                    }
                 }
             }
         } catch (e: Exception) { }
-        return "127.0.0.1"
+
+        if (v6.isNotEmpty()) return v6.sortedByDescending { it.first }.first().second
+        return v4.firstOrNull() ?: "127.0.0.1"
+    }
+
+    /**
+     * 本机 IPv4 地址（UDP 广播用）。广播只能走 IPv4，所以这里必须跳过 IPv6，
+     * 否则对端拿到无法回连的地址。
+     */
+    fun localIpV4(): String {
+        val v4 = mutableListOf<String>()
+        try {
+            val ifaces = NetworkInterface.getNetworkInterfaces() ?: return "127.0.0.1"
+            for (ni in ifaces) {
+                if (!ni.isUp || ni.isLoopback || ni.isVirtual) continue
+                val n = ni.name.lowercase()
+                val preferred = n.contains("wlan") || n.contains("wifi") ||
+                    n.contains("eth") || n.contains("ap") || n.contains("rmnet")
+                val addrs = ni.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val a = addrs.nextElement()
+                    if (a !is Inet4Address) continue
+                    if (a.isLoopbackAddress || a.isAnyLocalAddress) continue
+                    val ip = a.hostAddress ?: continue
+                    if (preferred) v4.add(0, ip) else v4.add(ip)
+                }
+            }
+        } catch (e: Exception) { }
+        return v4.firstOrNull() ?: "127.0.0.1"
     }
 
     /** 在共享 Download/飞鸽收件/ 下创建输出流；同名自动加 (1)(2)。 */
