@@ -85,11 +85,27 @@ object AppState {
 
     private val peerTimes = mutableMapOf<String, Long>()
 
+    /**
+     * 设备列表的固定顺序：先按设备名（忽略大小写），同名再按地址。
+     * 只要名字不变，位置就不会变；每 2 秒一次的广播不会把设备挪来挪去。
+     */
+    private fun List<Peer>.ordered(): List<Peer> =
+        sortedWith(compareBy<Peer> { it.name.lowercase() }.thenBy { it.key })
+
     @Synchronized
     fun updatePeer(peer: Peer, now: Long = System.currentTimeMillis()): Boolean {
         val isNew = !peerTimes.containsKey(peer.key)
         peerTimes[peer.key] = now
-        _peers.value = _peers.value.filter { it.key != peer.key } + peer
+
+        val list = _peers.value
+        val index = list.indexOfFirst { it.key == peer.key }
+        // 设备信息没变（只是又收到一次广播）就不碰列表，省掉一次无意义的重组
+        if (!isNew && index >= 0 && list[index] == peer) return false
+
+        _peers.value = if (index >= 0)
+            list.toMutableList().also { it[index] = peer }.ordered()
+        else
+            (list + peer).ordered()
         return isNew
     }
 
