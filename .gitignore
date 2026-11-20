@@ -11,6 +11,8 @@
 /FeigeP2P.exe
 /飞书.apk
 /FeigeP2P-android.apk
+/飞鸽P2P-Setup-x64.msi
+/*.wixpdb
 /crash.log
 
 # Local config with machine-specific paths
