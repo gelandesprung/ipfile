@@ -33,6 +33,29 @@
 
 ---
 
+## 编译产物（已放在根目录）
+
+| 文件 | 说明 |
+|---|---|
+| `FeigeP2P.exe` | PC 端单文件程序，204 KB，双击即可运行（需 .NET 8 桌面运行时，本机已具备） |
+| `FeigeP2P-android.apk` | Android 安装包，约 16 MB，支持 Android 7.0+ |
+
+这两个文件由构建脚本生成，已加入 `.gitignore`（二进制不进版本库）。
+
+重新生成：
+
+```bash
+# PC 端 → 根目录单文件
+dotnet publish pc/FeigeP2P.csproj -c Release -r win-x64 \
+  --self-contained false -p:PublishSingleFile=true -p:DebugType=none -o .
+
+# Android 端 → 复制到根目录
+cd android && ./gradlew assembleDebug
+cp app/build/outputs/apk/debug/app-debug.apk ../FeigeP2P-android.apk
+```
+
+---
+
 ## PC 端
 
 ### 编译
@@ -42,10 +65,10 @@
 ```bash
 cd pc
 dotnet build -c Release
-# 产物：pc/bin/Release/net8.0-windows/  （整个目录可拷贝到任意 Windows 机器运行）
+# 产物：pc/bin/Release/net8.0-windows/
 ```
 
-运行 `FeigeP2P.exe` 或 `FeigeP2P.dll`（`dotnet FeigeP2P.dll`）。**无需安装运行时**时，可用 `dotnet publish -c Release -r win-x64 --self-contained true` 生成独立单文件。
+日常运行请直接用根目录的 `FeigeP2P.exe`（单文件）。若目标机器**没有安装 .NET 8 运行时**，改用自包含发布：`dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`。
 
 ### 使用
 

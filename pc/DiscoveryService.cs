@@ -18,8 +18,11 @@ public sealed class DiscoveryService : IDisposable
     private readonly string _localIp;
     private string _deviceName;
 
+    /// <summary>设备离线判定的静默时长：广播间隔 2 秒，容忍 6 次丢包。</summary>
+    private const int TtlSeconds = 12;
+
     public IReadOnlyDictionary<string, Peer> Peers => _peers;
-    public event Action<Peer, bool>? PeerChanged; // (peer, isAdded)
+    public event Action<Peer, PeerChange>? PeerChanged;
     public event Action<string>? Diag; // 诊断日志（调试发现问题时用）
 
     public DiscoveryService(AppConfig config)
@@ -89,14 +92,16 @@ public sealed class DiscoveryService : IDisposable
 
                 if (pkt.Bye)
                 {
-                    if (_peers.TryRemove(peer.Key, out _)) PeerChanged?.Invoke(peer, false);
+                    if (_peers.TryRemove(peer.Key, out _)) PeerChanged?.Invoke(peer, PeerChange.Removed);
                     continue;
                 }
 
                 peer.LastSeen = DateTime.Now;
                 var isNew = !_peers.ContainsKey(peer.Key);
                 _peers[peer.Key] = peer;
-                PeerChanged?.Invoke(peer, isNew);
+                // 注意：周期性广播会反复命中同一设备，必须区分「新增」和「刷新」，
+                // 否则会被误判成「离线」，把设备从列表里删掉。
+                PeerChanged?.Invoke(peer, isNew ? PeerChange.Added : PeerChange.Updated);
             }
             catch (OperationCanceledException) { break; }
             catch { }
@@ -122,9 +127,9 @@ public sealed class DiscoveryService : IDisposable
             var now = DateTime.Now;
             foreach (var kv in _peers)
             {
-                if ((now - kv.Value.LastSeen).TotalSeconds > 6 &&
+                if ((now - kv.Value.LastSeen).TotalSeconds > TtlSeconds &&
                     _peers.TryRemove(kv.Key, out var removed))
-                    PeerChanged?.Invoke(removed, false);
+                    PeerChanged?.Invoke(removed, PeerChange.Removed);
             }
         }
     }

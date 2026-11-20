@@ -15,6 +15,17 @@ public sealed class Peer
     public string Key => $"{Ip}:{TcpPort}";
 }
 
+/// <summary>设备列表的变化类型。</summary>
+public enum PeerChange
+{
+    /// <summary>首次发现该设备。</summary>
+    Added,
+    /// <summary>已知设备的周期性广播（名称/端口可能有变），只刷新显示。</summary>
+    Updated,
+    /// <summary>收到 BYE 或超时，真正离线。</summary>
+    Removed
+}
+
 /// <summary>一条传输记录（会话内显示）。</summary>
 public sealed record TransferRecord(string Direction, string Name, string PeerName, string Status, DateTime Time);
 

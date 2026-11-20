@@ -128,5 +128,36 @@ try {
 } catch (Exception ex) { Console.WriteLine("    抓包失败：" + ex.Message); }
 Check("广播包格式可被对端解析", captured);
 
+// ---------- 4. 设备事件语义（回归：周期性广播不能把设备判成离线） ----------
+Console.WriteLine("\n[4] 设备事件语义");
+var seq = new List<(PeerChange change, int peerCount)>();
+using var disc2 = new DiscoveryService(new AppConfig { DeviceName = "事件测试机", UdpPort = 25020, TcpPort = 25021 });
+disc2.PeerChanged += (peer, change) => { lock (seq) seq.Add((change, disc2.Peers.Count)); };
+disc2.Start();
+await Task.Delay(300);
+
+using (var tx = new System.Net.Sockets.UdpClient())
+{
+    async Task SendPkt(bool bye)
+    {
+        // 包内 IP 故意用一个非本机地址，绕过「忽略自己」的过滤
+        var bytes = Encoding.UTF8.GetBytes(Protocol.BuildDiscovery("模拟手机", "10.9.8.7", 25021, bye));
+        await tx.SendAsync(bytes, bytes.Length, new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 25020));
+        await Task.Delay(400);
+    }
+    await SendPkt(false); // 首次广播 → Added
+    await SendPkt(false); // 同一设备再来一次 → 必须是 Updated，不能删行
+    await SendPkt(true);  // BYE → Removed
+}
+
+List<(PeerChange change, int peerCount)> snap;
+lock (seq) snap = new List<(PeerChange, int)>(seq);
+var seqText = string.Join(" → ", snap.Select(s => $"{s.change}({s.peerCount})"));
+Console.WriteLine($"    事件序列：{seqText}");
+
+Check("首次广播判定为 Added", snap.Count >= 1 && snap[0].change == PeerChange.Added);
+Check("重复广播只刷新不删行", snap.Count >= 2 && snap[1].change == PeerChange.Updated && snap[1].peerCount == 1, seqText);
+Check("BYE 才判定为 Removed", snap.Count >= 3 && snap[2].change == PeerChange.Removed && snap[2].peerCount == 0, seqText);
+
 Console.WriteLine($"\n========== 结果：{passed} 通过 / {failed} 失败 ==========");
 Environment.Exit(failed == 0 ? 0 : 1);

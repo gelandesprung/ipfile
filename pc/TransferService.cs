@@ -58,6 +58,11 @@ public sealed class TransferService : IDisposable
             client.SendTimeout = (int)HandshakeTimeout.TotalMilliseconds;
             var stream = client.GetStream();
 
+            // 打出对端 IP：若手机发文件时这里连这一行都没有，说明连接根本没到本机（防火墙/网段问题），
+            // 而不是协议解析问题。这是区分两类故障最直接的证据。
+            var ep = client.Client.RemoteEndPoint as IPEndPoint;
+            if (ep != null) Log?.Invoke($"收到来自 {ep.Address} 的连接");
+
             var header = await ReadLineAsync(stream, HandshakeTimeout);
             if (header == null) { Log?.Invoke("接收：未收到请求头，已断开"); return; }
 

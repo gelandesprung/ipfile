@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.*
@@ -205,9 +206,25 @@ class P2PEngine(private val appContext: Context) {
     suspend fun sendFile(target: Peer, uri: Uri): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val cr = appContext.contentResolver
         val displayName = queryDisplayName(cr, uri) ?: "文件"
-        val size = try {
-            cr.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1
-        } catch (e: Exception) { -1 }
+
+        // 部分 Provider 查不到文件大小（statSize=-1）。若直接按 0 发送，
+        // 对方会立刻按「0 字节」收完并生成空文件——所以先落到缓存文件量出真实长度。
+        var tmpFile: File? = null
+        var size = resolveSize(cr, uri)
+        var openInput: () -> InputStream? = { cr.openInputStream(uri) }
+        if (size < 0) {
+            val t = File(appContext.cacheDir, "feige_send_${System.nanoTime()}.tmp")
+            try {
+                val ins = cr.openInputStream(uri) ?: return@withContext false to "无法读取所选文件"
+                ins.use { input -> t.outputStream().use { input.copyTo(it) } }
+            } catch (e: Exception) {
+                try { t.delete() } catch (_: Exception) { }
+                return@withContext false to "无法读取所选文件：${e.message}"
+            }
+            tmpFile = t
+            size = t.length()
+            openInput = { t.inputStream() }
+        }
 
         var client: Socket? = null
         try {
@@ -215,7 +232,7 @@ class P2PEngine(private val appContext: Context) {
             client = Socket()
             client.soTimeout = 10000
             withTimeout(10_000) { client.connect(InetSocketAddress(target.ip, target.tcpPort), 10_000) }
-            writeLine(client, Protocol.buildFileRequest(displayName, size.coerceAtLeast(0)))
+            writeLine(client, Protocol.buildFileRequest(displayName, size))
 
             val replyStream = client.getInputStream()
             val ackLine = withTimeout(10_000) { readLineRaw(replyStream) }
@@ -223,7 +240,7 @@ class P2PEngine(private val appContext: Context) {
             val ack = Protocol.parseAck(ackLine)
             if (!ack.first) return@withContext false to "对方拒绝：${ack.second}"
 
-            val input = cr.openInputStream(uri) ?: return@withContext false to "无法打开文件"
+            val input = openInput() ?: return@withContext false to "无法打开文件"
             input.use { ins ->
                 val out = client.getOutputStream()
                 val buf = ByteArray(BUF)
@@ -249,6 +266,7 @@ class P2PEngine(private val appContext: Context) {
             false to (e.message ?: "未知错误")
         } finally {
             try { client?.close() } catch (e: Exception) { }
+            try { tmpFile?.delete() } catch (e: Exception) { }
             AppState.setProgress(null)
         }
     }
@@ -263,6 +281,21 @@ class P2PEngine(private val appContext: Context) {
             }
         }
         return uri.lastPathSegment
+    }
+
+    /** 尽量查出文件长度；查不到返回 -1（调用方会退回缓存文件方式量长度）。 */
+    private fun resolveSize(cr: android.content.ContentResolver, uri: Uri): Long {
+        try {
+            cr.openFileDescriptor(uri, "r")?.use { fd ->
+                if (fd.statSize >= 0) return fd.statSize
+            }
+        } catch (e: Exception) { }
+        try {
+            cr.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                if (afd.length >= 0) return afd.length
+            }
+        } catch (e: Exception) { }
+        return -1
     }
 
     /** 逐字节读一行（以 \n 结尾），不使用 BufferedReader，避免预读缓冲吞掉随后的文件二进制数据。 */

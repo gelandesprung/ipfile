@@ -393,7 +393,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                         ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
                     } catch (e: Exception) { "?" }
                     Text("飞鸽 P2P · v$ver", fontSize = 12.sp, color = C.Gray)
-                    Text("build 2026-11-20-c · 含手动直连", fontSize = 11.sp, color = C.Gray)
+                    Text("build 2026-11-20-d · 修复设备消失", fontSize = 11.sp, color = C.Gray)
                 }
             }
         }

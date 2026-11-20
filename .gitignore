@@ -7,6 +7,11 @@
 **/.idea/
 **/*.user
 
+# Root build artifacts (本地发布产物，不入版本库)
+/FeigeP2P.exe
+/FeigeP2P-android.apk
+/crash.log
+
 # Local config with machine-specific paths
 **/local.properties
 

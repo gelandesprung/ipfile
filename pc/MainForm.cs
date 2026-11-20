@@ -44,10 +44,26 @@ public sealed class MainForm : Form
         BuildUi();
         WireEvents();
 
-        _transfer.Start();
-        _discovery.Start();
+        // 两个服务分别启动：任一失败都要给出明确原因，而不是整个程序闪退
+        string? tcpError = null, udpError = null;
+        try { _transfer.Start(); }
+        catch (Exception ex) { tcpError = ex.Message; }
+
+        try { _discovery.Start(); }
+        catch (Exception ex) { udpError = ex.Message; }
+
         AppendLog($"已启动 · 本机 {_config.DeviceName} ({_discovery.LocalIp}:{_config.TcpPort})", Color.FromArgb(25, 100, 180));
-        AppendLog("右键在线设备发送文件；若发现不到对方，可用「手动输入 IP 直连」", Color.Gray);
+
+        if (tcpError == null)
+            AppendLog($"接收服务已就绪 · 监听 0.0.0.0:{_config.TcpPort}，等待对方发送", Color.FromArgb(25, 140, 60));
+        else
+            AppendLog($"接收服务启动失败：{tcpError}（端口可能被占用，或已有飞鸽在运行）", Color.FromArgb(190, 40, 40));
+
+        if (udpError != null)
+            AppendLog($"设备发现启动失败：{udpError}", Color.FromArgb(190, 40, 40));
+
+        AppendLog("右键在线设备发送文件；列表为空时右键空白处可用「手动输入 IP 直连」", Color.Gray);
+        AppendLog("若对方连得上却看不到本机，请确认 Windows 防火墙已允许本程序访问「专用网络」", Color.Gray);
     }
 
     // ---------------- UI 构建 ----------------
@@ -76,20 +92,21 @@ public sealed class MainForm : Form
         root.Controls.Add(BuildTop(), 0, 0);
         root.Controls.Add(BuildBody(), 0, 1);
         root.Controls.Add(BuildBottom(), 0, 2);
+
+        // 顶部条高度按字体实测结果计算，高 DPI 下也不会把名称压到副标题上
+        var topHeight = _nameLabel.PreferredHeight + _localInfo.PreferredHeight + 28;
+        root.RowStyles[0].Height = Math.Max(72, topHeight);
+        root.PerformLayout();
     }
 
     private Control BuildTop()
     {
-        // 用 TableLayoutPanel：左列自动伸缩，右列固定宽度放在线状态，绝不会重叠/裁切
-        var grid = new TableLayoutPanel
+        // 不用 TableLayoutPanel 的百分比行：AutoSize 的大字号标签会溢出单元格造成重叠。
+        // 改为「实测尺寸 + 手工定位」，任意 DPI 下都精确。
+        var host = new Panel
         {
-            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2,
-            Margin = Padding.Empty, Padding = new Padding(20, 8, 20, 6), BackColor = Color.White
+            Dock = DockStyle.Fill, BackColor = Color.White, Margin = Padding.Empty, Padding = Padding.Empty
         };
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100F));
-        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 60F));
-        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 40F));
 
         _nameLabel.Text = _config.DeviceName;
         _nameLabel.Font = new Font("微软雅黑", 15F, FontStyle.Bold);
@@ -97,32 +114,54 @@ public sealed class MainForm : Form
         _nameLabel.AutoSize = true;
         _nameLabel.Cursor = Cursors.Hand;
         _tip.SetToolTip(_nameLabel, "点击修改本机设备名");
-        grid.Controls.Add(_nameLabel, 0, 0);
 
-        _nameBox.Size = new Size(260, 30);
         _nameBox.Font = new Font("微软雅黑", 12F);
         _nameBox.Visible = false;
-        grid.Controls.Add(_nameBox, 0, 0);
 
         _localInfo.Text = $"{_discovery.LocalIp}:{_config.TcpPort}   ·   协议 v1.0   ·   点击名称可修改";
         _localInfo.ForeColor = Color.FromArgb(130, 138, 148);
         _localInfo.Font = new Font("微软雅黑", 9F);
         _localInfo.AutoSize = true;
-        grid.Controls.Add(_localInfo, 0, 1);
 
         _onlineDot.Text = "● 在线";
         _onlineDot.ForeColor = Color.FromArgb(32, 168, 72);
-        _onlineDot.Font = new Font("微软雅黑", 11F, FontStyle.Bold);
-        _onlineDot.Dock = DockStyle.Fill;
-        _onlineDot.TextAlign = ContentAlignment.MiddleRight;
-        grid.Controls.Add(_onlineDot, 1, 0);
-        grid.SetRowSpan(_onlineDot, 2);
+        _onlineDot.Font = new Font("微软雅黑", 10F, FontStyle.Bold);
+        _onlineDot.AutoSize = true; // 不 Dock：AutoSize 才能保证「● 在线」不被裁成「● 在」
+        _onlineDot.BackColor = Color.Transparent;
 
-        var host = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Margin = Padding.Empty };
-        host.Controls.Add(grid);
+        host.Controls.Add(_nameLabel);
+        host.Controls.Add(_nameBox);
+        host.Controls.Add(_localInfo);
+        host.Controls.Add(_onlineDot);
+
         var line = new Panel { Dock = DockStyle.Bottom, Height = 1, BackColor = Color.FromArgb(224, 228, 233) };
         host.Controls.Add(line);
+
+        host.Layout += (_, _) => LayoutTopBar(host);
         return host;
+    }
+
+    /// <summary>顶部条定位：右侧状态贴右，名称与副标题纵向堆叠，按实测高度排布。</summary>
+    private void LayoutTopBar(Panel host)
+    {
+        const int padX = 22;
+        var right = host.ClientSize.Width - padX;
+
+        _onlineDot.Location = new Point(
+            Math.Max(padX, right - _onlineDot.Width),
+            Math.Max(0, (host.ClientSize.Height - _onlineDot.Height) / 2));
+
+        if (_nameBox.Visible)
+        {
+            var maxW = Math.Max(160, _onlineDot.Left - padX - 20);
+            _nameBox.Width = Math.Min(320, maxW);
+            _nameBox.Location = new Point(padX, Math.Max(8, (host.ClientSize.Height - _nameBox.Height) / 2));
+        }
+        else
+        {
+            _nameLabel.Location = new Point(padX, 10);
+            _localInfo.Location = new Point(padX, _nameLabel.Bottom + 2);
+        }
     }
 
     private Control BuildBody()
@@ -201,9 +240,12 @@ public sealed class MainForm : Form
         _emptyHint.Dock = DockStyle.Fill;
 
         var listHost = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.White };
-        listHost.Controls.Add(_emptyHint);
         listHost.Controls.Add(_devices);
-        _devices.BringToFront();
+        listHost.Controls.Add(_emptyHint);
+        _emptyHint.BringToFront(); // 空状态提示要浮在列表之上，列表有内容时再隐藏
+        // 空白处右键也能出菜单，「手动输入 IP 直连」不会因为列表为空而不可用
+        listHost.ContextMenuStrip = _deviceMenu;
+        _emptyHint.ContextMenuStrip = _deviceMenu;
         left.Controls.Add(listHost, 0, 1);
 
         var folderBar = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.White, Padding = new Padding(12, 7, 12, 7) };
@@ -218,13 +260,16 @@ public sealed class MainForm : Form
         folderBar.Controls.Add(openFolder);
         left.Controls.Add(folderBar, 0, 2);
 
-        Resize += (_, _) =>
+        // 列宽按列表实际宽度分配（用 SizeChanged 而不是窗体 Resize，避免拿到未布局的宽度）
+        void FitColumns()
         {
             int w = Math.Max(_devices.ClientSize.Width - 4, 200);
             _devices.Columns[0].Width = (int)(w * 0.48);
             _devices.Columns[1].Width = (int)(w * 0.36);
             _devices.Columns[2].Width = w - _devices.Columns[0].Width - _devices.Columns[1].Width;
-        };
+        }
+        _devices.SizeChanged += (_, _) => FitColumns();
+        FitColumns();
         return left;
     }
 
@@ -316,26 +361,42 @@ public sealed class MainForm : Form
         };
         _menuManual.Click += (_, _) => ManualSendAsync().FireAndForget();
 
-        _discovery.PeerChanged += (peer, added) => Ui(() =>
+        _discovery.PeerChanged += (peer, change) => Ui(() =>
         {
-            if (added)
+            var existing = FindItem(peer.Key);
+            switch (change)
             {
-                var existing = FindItem(peer.Key);
-                if (existing == null)
-                {
-                    _devices.Items.Add(new ListViewItem(new[] { peer.Name, peer.Ip, peer.TcpPort.ToString() }) { Tag = peer });
-                    AppendLog($"发现设备：{peer.Name} ({peer.Ip})", Color.FromArgb(180, 130, 20));
-                }
-                else { existing.SubItems[0].Text = peer.Name; existing.Tag = peer; }
-            }
-            else
-            {
-                var item = FindItem(peer.Key);
-                if (item != null)
-                {
-                    _devices.Items.Remove(item);
-                    AppendLog($"设备离线：{peer.Name}", Color.FromArgb(180, 130, 20));
-                }
+                case PeerChange.Added:
+                    if (existing == null)
+                    {
+                        _devices.Items.Add(new ListViewItem(new[] { peer.Name, peer.Ip, peer.TcpPort.ToString() }) { Tag = peer });
+                        AppendLog($"发现设备：{peer.Name} ({peer.Ip})", Color.FromArgb(180, 130, 20));
+                    }
+                    else
+                    {
+                        existing.SubItems[0].Text = peer.Name;
+                        existing.Tag = peer;
+                    }
+                    break;
+
+                case PeerChange.Updated:
+                    // 周期性广播只是刷新，绝不能删行（这正是「设备上线就消失」的根因）
+                    if (existing != null)
+                    {
+                        existing.SubItems[0].Text = peer.Name;
+                        existing.SubItems[1].Text = peer.Ip;
+                        existing.SubItems[2].Text = peer.TcpPort.ToString();
+                        existing.Tag = peer;
+                    }
+                    break;
+
+                case PeerChange.Removed:
+                    if (existing != null)
+                    {
+                        _devices.Items.Remove(existing);
+                        AppendLog($"设备离线：{peer.Name}", Color.FromArgb(180, 130, 20));
+                    }
+                    break;
             }
             _emptyHint.Visible = _devices.Items.Count == 0;
         });
@@ -368,10 +429,12 @@ public sealed class MainForm : Form
 
     private void DeviceMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (_devices.SelectedItems.Count == 0) { e.Cancel = true; return; }
-        _menuTarget = _devices.SelectedItems[0].Tag as Peer;
-        if (_menuTarget == null) { e.Cancel = true; return; }
-        _menuSend.Text = $"发送文件到 {_menuTarget.Name}…";
+        // 列表为空时不再取消菜单——否则「手动输入 IP 直连」永远点不到
+        var sel = _devices.SelectedItems.Count > 0 ? _devices.SelectedItems[0].Tag as Peer : null;
+        _menuTarget = sel;
+        _menuSend.Enabled = sel != null;
+        _menuCopyIp.Enabled = sel != null;
+        _menuSend.Text = sel != null ? $"发送文件到 {sel.Name}…" : "发送文件（先选中设备）";
     }
 
     private async Task SendFromMenuAsync()
