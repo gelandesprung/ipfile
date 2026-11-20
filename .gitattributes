@@ -1,0 +1,12 @@
+# 行尾策略：文本文件按仓库内 LF 存储，检出时由 core.autocrlf 按平台转换。
+* text=auto
+
+# shell 脚本必须保持 LF，否则在 Windows 上检出成 CRLF 后 bash 会报
+# "$'\r': command not found"（pc/installer/build-msi.sh 会因此跑不起来）
+*.sh text eol=lf
+
+# 二进制，不做任何转换
+*.png binary
+*.ico binary
+*.apk binary
+*.msi binary
