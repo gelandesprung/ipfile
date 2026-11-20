@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Android 9 及以下接收的文件落在公共 Download 目录，经 FileProvider 暴露给查看器 -->
+    <external-path name="downloads" path="Download/" />
+    <external-files-path name="appfiles" path="." />
+    <cache-path name="cache" path="." />
+</paths>

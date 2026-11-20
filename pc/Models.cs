@@ -26,6 +26,12 @@ public enum PeerChange
     Removed
 }
 
+/// <summary>收到的一笔发文件请求（用于向用户确认是否接收）。</summary>
+public sealed record IncomingRequest(string FileName, long Size, string RemoteIp);
+
+/// <summary>用户对接收请求的决定。<paramref name="SavePath"/> 为空表示存到默认收件夹。</summary>
+public sealed record ReceiveDecision(bool Accept, string? SavePath = null);
+
 /// <summary>一条传输记录（会话内显示）。</summary>
 public sealed record TransferRecord(string Direction, string Name, string PeerName, string Status, DateTime Time);
 

@@ -7,12 +7,40 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.core.content.FileProvider
 import java.io.File
 import java.io.OutputStream
 import java.net.Inet4Address
 import java.net.NetworkInterface
 
 object NetUtils {
+    /** 接收目标：输出流 + 展示路径 + 可打开该文件的 Uri。 */
+    data class ReceiveTarget(val stream: OutputStream, val displayPath: String, val uri: Uri)
+
+    /** 按扩展名推断 MIME，供保存与「点击打开」使用。 */
+    fun mimeOf(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "bmp" -> "image/bmp"
+        "pdf" -> "application/pdf"
+        "txt", "log", "md" -> "text/plain"
+        "mp4" -> "video/mp4"
+        "mkv" -> "video/x-matroska"
+        "mp3" -> "audio/mpeg"
+        "wav" -> "audio/wav"
+        "apk" -> "application/vnd.android.package-archive"
+        "zip" -> "application/zip"
+        "doc" -> "application/msword"
+        "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        "xls" -> "application/vnd.ms-excel"
+        "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "ppt" -> "application/vnd.ms-powerpoint"
+        "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        else -> "application/octet-stream"
+    }
+
     /** 取本机局域网 IPv4（跳过回环/虚拟网卡）。 */
     fun localIp(): String {
         try {
@@ -42,14 +70,15 @@ object NetUtils {
     }
 
     /** 在共享 Download/飞鸽收件/ 下创建输出流；同名自动加 (1)(2)。 */
-    fun createReceiveStream(context: Context, fileName: String): Pair<OutputStream, String> {
+    fun createReceiveStream(context: Context, fileName: String): ReceiveTarget {
         val base = fileName.substringAfterLast('/').substringAfterLast('\\').ifEmpty { "未命名文件" }
+        val mime = mimeOf(base)
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // MediaStore：无需存储权限。先查出重名后生成唯一名，避免覆盖。
             val finalName = uniqueNameMediaStore(context, base)
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, finalName)
-                put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                put(MediaStore.Downloads.MIME_TYPE, mime)
                 put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/飞鸽收件")
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
@@ -66,13 +95,14 @@ object NetUtils {
                     context.contentResolver.update(uri, v, null, null)
                 }
             }
-            finalOut to "Download/飞鸽收件/$finalName"
+            ReceiveTarget(finalOut, "Download/飞鸽收件/$finalName", uri)
         } else {
-            // Android 9 及以下：公共 Download 目录
+            // Android 9 及以下：公共 Download 目录，经 FileProvider 暴露以便「点击打开」
             val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "飞鸽收件")
             dir.mkdirs()
             val file = File(dir, uniqueNameFile(dir, base))
-            file.outputStream() to ("Download/飞鸽收件/${file.name}")
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            ReceiveTarget(file.outputStream(), "Download/飞鸽收件/${file.name}", uri)
         }
     }
 

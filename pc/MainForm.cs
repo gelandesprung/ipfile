@@ -403,6 +403,7 @@ public sealed class MainForm : Form
 
         _discovery.Diag += msg => Ui(() => AppendLogDiag(msg));
         _transfer.Log += msg => Ui(() => AppendLog(msg, Color.FromArgb(40, 40, 40)));
+        _transfer.ConfirmReceive += ConfirmReceiveAsync;
         _transfer.Progress += (dir, name, done, total) => Ui(() =>
         {
             var pct = total > 0 ? (int)(1000.0 * done / total) : 0;
@@ -425,6 +426,33 @@ public sealed class MainForm : Form
         });
 
         FormClosing += (_, _) => { _discovery.Dispose(); _transfer.Dispose(); };
+    }
+
+    /// <summary>收到发文件请求：在 UI 线程弹确认框（可选另存位置），用户点「接收」才返回同意。</summary>
+    private Task<ReceiveDecision> ConfirmReceiveAsync(IncomingRequest req)
+    {
+        var tcs = new TaskCompletionSource<ReceiveDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Ui(() =>
+        {
+            try
+            {
+                if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+                Activate();
+                using var dlg = new ReceiveConfirmDialog(req) { Owner = this };
+                var accept = dlg.ShowDialog(this) == DialogResult.OK;
+                if (accept)
+                    AppendLog($"已接受接收：{req.FileName} → {dlg.SavePath}", Color.FromArgb(25, 140, 60));
+                else
+                    AppendLog($"已拒绝接收：{req.FileName}（来自 {req.RemoteIp}，已通知对方）", Color.FromArgb(190, 40, 40));
+                tcs.TrySetResult(new ReceiveDecision(accept, accept ? dlg.SavePath : null));
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"确认框异常：{ex.Message}", Color.FromArgb(190, 40, 40));
+                tcs.TrySetResult(new ReceiveDecision(false));
+            }
+        });
+        return tcs.Task;
     }
 
     private void DeviceMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -581,6 +609,206 @@ internal sealed class InputDialog : Form
         Controls.Add(root);
         AcceptButton = ok;
         CancelButton = cancel;
+    }
+}
+
+/// <summary>接收确认对话框：显示文件名/大小/来源，可选保存位置；60 秒不操作自动拒绝。</summary>
+internal sealed class ReceiveConfirmDialog : Form
+{
+    private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
+    private readonly Label _countdown = new();
+    private readonly Label _pathLabel = new();
+    private readonly IncomingRequest _req;
+    private int _left = 60;
+    private string _savePath;
+
+    /// <summary>用户选定的保存路径（默认即收件夹下的同名文件）。</summary>
+    public string SavePath => _savePath;
+
+    public ReceiveConfirmDialog(IncomingRequest req)
+    {
+        _req = req;
+        _savePath = Path.Combine(AppConfig.ReceiveDirectory, SafeFileName(req.FileName));
+
+        Text = "收到文件";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterParent;
+        ClientSize = new Size(460, 300);
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        TopMost = true;
+        BackColor = Color.White;
+        Font = new Font("微软雅黑", 9.5F);
+
+        var body = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 6,
+            Padding = new Padding(22, 18, 22, 14)
+        };
+        body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 22F));
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F));
+        body.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
+
+        body.Controls.Add(new Label
+        {
+            Text = "收到文件",
+            Font = new Font("微软雅黑", 13F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(28, 32, 38),
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft
+        }, 0, 0);
+
+        body.Controls.Add(new Label
+        {
+            Text = req.FileName,
+            Font = new Font("微软雅黑", 12F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(30, 100, 180),
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true
+        }, 0, 1);
+
+        body.Controls.Add(new Label
+        {
+            Text = $"{TransferService.FormatSize(req.Size)}   ·   来自 {req.RemoteIp}",
+            ForeColor = Color.FromArgb(120, 128, 138),
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft
+        }, 0, 2);
+
+        // 保存位置：默认收件夹，可点「选择…」另存
+        var saveRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2,
+            Margin = new Padding(0), Padding = new Padding(0)
+        };
+        saveRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        saveRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82F));
+        saveRow.RowStyles.Add(new RowStyle(SizeType.Absolute, 18F));
+        saveRow.RowStyles.Add(new RowStyle(SizeType.Absolute, 26F));
+
+        var saveTitle = new Label
+        {
+            Text = "保存到",
+            Font = new Font("微软雅黑", 8.5F),
+            ForeColor = Color.FromArgb(140, 148, 158),
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        saveRow.Controls.Add(saveTitle, 0, 0);
+        saveRow.SetColumnSpan(saveTitle, 2);
+
+        _pathLabel.Text = _savePath;
+        _pathLabel.ForeColor = Color.FromArgb(60, 68, 78);
+        _pathLabel.Dock = DockStyle.Fill;
+        _pathLabel.TextAlign = ContentAlignment.MiddleLeft;
+        _pathLabel.AutoEllipsis = true;
+        saveRow.Controls.Add(_pathLabel, 0, 1);
+
+        var pickBtn = new Button
+        {
+            Text = "选择…",
+            Dock = DockStyle.Fill,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(246, 249, 253),
+            ForeColor = Color.FromArgb(40, 96, 168),
+            Cursor = Cursors.Hand,
+            Margin = new Padding(6, 0, 0, 0)
+        };
+        pickBtn.FlatAppearance.BorderColor = Color.FromArgb(206, 218, 234);
+        pickBtn.Click += (_, _) => PickPath();
+        saveRow.Controls.Add(pickBtn, 1, 1);
+        body.Controls.Add(saveRow, 0, 3);
+
+        _countdown.Text = "若 60 秒内未选择，将自动拒绝并通知对方";
+        _countdown.ForeColor = Color.FromArgb(170, 135, 40);
+        _countdown.Dock = DockStyle.Fill;
+        _countdown.TextAlign = ContentAlignment.MiddleLeft;
+        body.Controls.Add(_countdown, 0, 4);
+
+        var btns = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty,
+            WrapContents = false
+        };
+        var acceptBtn = new Button
+        {
+            Text = "接收",
+            DialogResult = DialogResult.OK,
+            Size = new Size(96, 32),
+            BackColor = Color.FromArgb(30, 111, 217),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+            Font = new Font("微软雅黑", 9.5F, FontStyle.Bold),
+            Cursor = Cursors.Hand,
+            Margin = new Padding(8, 4, 0, 0)
+        };
+        acceptBtn.FlatAppearance.BorderSize = 0;
+        var rejectBtn = new Button
+        {
+            Text = "拒绝",
+            DialogResult = DialogResult.Cancel,
+            Size = new Size(88, 32),
+            BackColor = Color.FromArgb(245, 246, 248),
+            ForeColor = Color.FromArgb(70, 78, 88),
+            FlatStyle = FlatStyle.Flat,
+            Cursor = Cursors.Hand,
+            Margin = new Padding(0, 4, 0, 0)
+        };
+        rejectBtn.FlatAppearance.BorderColor = Color.FromArgb(214, 220, 228);
+        btns.Controls.Add(acceptBtn);
+        btns.Controls.Add(rejectBtn);
+        body.Controls.Add(btns, 0, 5);
+
+        Controls.Add(body);
+        AcceptButton = acceptBtn;
+        CancelButton = rejectBtn;
+
+        _timer.Tick += (_, _) =>
+        {
+            _left--;
+            if (_left <= 0) { DialogResult = DialogResult.Cancel; Close(); return; }
+            _countdown.Text = $"若 {_left} 秒内未选择，将自动拒绝并通知对方";
+        };
+        _timer.Start();
+        FormClosed += (_, _) => { _timer.Stop(); _timer.Dispose(); };
+    }
+
+    private void PickPath()
+    {
+        using var dlg = new SaveFileDialog
+        {
+            Title = "选择保存位置",
+            FileName = SafeFileName(_req.FileName),
+            InitialDirectory = AppConfig.ReceiveDirectory,
+            Filter = "所有文件|*.*",
+            OverwritePrompt = true
+        };
+        if (dlg.ShowDialog(this) == DialogResult.OK)
+        {
+            _savePath = dlg.FileName;
+            _pathLabel.Text = _savePath;
+        }
+    }
+
+    /// <summary>把对端发来的文件名里不合法的字符替换掉，避免保存对话框直接报错。</summary>
+    private static string SafeFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var sb = new System.Text.StringBuilder(name.Length);
+        foreach (var c in name) sb.Append(Array.IndexOf(invalid, c) >= 0 ? '_' : c);
+        var s = sb.ToString().Trim().Trim('.');
+        return s.Length == 0 ? "received_file" : s;
     }
 }
 

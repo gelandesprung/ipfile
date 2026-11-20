@@ -19,11 +19,17 @@ class P2PEngine(private val appContext: Context) {
         const val UDP_PORT = 2425
         const val TCP_PORT = 2425
         private const val BUF = 64 * 1024
+        /** 等待用户确认接收的最长时间，超时按拒绝处理。 */
+        const val CONFIRM_TIMEOUT_MS = 60_000L
+        /** 发送方等待对方确认的时间，必须长于接收方确认窗口。 */
+        private const val ACK_TIMEOUT_MS = 90_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var udp: DatagramSocket? = null
     private var server: ServerSocket? = null
+    /** 每个待确认请求对应一个 CompletableDeferred，用户选择后 complete。 */
+    private val pendingDecisions = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
     @Volatile private var running = false
 
     fun start() {
@@ -41,6 +47,11 @@ class P2PEngine(private val appContext: Context) {
         udp?.close(); udp = null
         try { server?.close() } catch (e: Exception) { }
         server = null
+        // 所有待确认请求按拒绝处理，别让对方一直等到超时
+        pendingDecisions.keys.toList().forEach { key ->
+            pendingDecisions.remove(key)?.complete(false)
+        }
+        AppState.setPending(null)
         scope.cancel()
     }
 
@@ -93,11 +104,11 @@ class P2PEngine(private val appContext: Context) {
                 }
             }
         }
-        // 清理离线设备
+        // 清理离线设备（与 PC 端一致：12 秒，容忍 WiFi 丢包）
         scope.launch {
             while (isActive && running) {
                 delay(1000)
-                AppState.prunePeers(6000)
+                AppState.prunePeers(12_000)
             }
         }
     }
@@ -157,11 +168,37 @@ class P2PEngine(private val appContext: Context) {
                 return@withContext
             }
 
-            val outStream: OutputStream
-            val displayPath: String
+            val remoteIp = try { client.inetAddress?.hostAddress ?: "对方" } catch (e: Exception) { "对方" }
+
+            // － 接收确认：先问用户，同意才建文件、才回 ACK OK －
+            val requestId = java.util.UUID.randomUUID().toString()
+            val decision = CompletableDeferred<Boolean>()
+            pendingDecisions[requestId] = decision
+            AppState.setPending(PendingRequest(requestId, header.fileName, header.size, remoteIp,
+                System.currentTimeMillis() + CONFIRM_TIMEOUT_MS))
+            AppState.log("收到发送请求：${header.fileName} (${NetUtils.formatSize(header.size)}) 来自 $remoteIp，等待确认…")
+
+            val accepted = try {
+                withTimeoutOrNull(CONFIRM_TIMEOUT_MS) { decision.await() } ?: false
+            } catch (e: Exception) {
+                false
+            } finally {
+                pendingDecisions.remove(requestId)
+                // 并发请求时只清掉属于自己的那条，别把别人的确认框关了
+                if (AppState.pending.value?.id == requestId) AppState.setPending(null)
+            }
+
+            if (!accepted) {
+                writeLine(client, Protocol.buildAckReject("对方拒绝接收"))
+                AppState.log("已拒绝接收：${header.fileName}（已通知对方）")
+                AppState.addRecord(TransferRecord(TransferDirection.RECEIVE, header.fileName, remoteIp,
+                    header.size, false, nowTime()))
+                return@withContext
+            }
+
+            val target: NetUtils.ReceiveTarget
             try {
-                val (out, path) = NetUtils.createReceiveStream(appContext, header.fileName)
-                outStream = out; displayPath = path
+                target = NetUtils.createReceiveStream(appContext, header.fileName)
                 pending = true
             } catch (e: Exception) {
                 writeLine(client, Protocol.buildAckReject("无法创建文件：${e.message}"))
@@ -169,29 +206,32 @@ class P2PEngine(private val appContext: Context) {
                 return@withContext
             }
 
-            AppState.log("收到发送请求：${header.fileName} (${NetUtils.formatSize(header.size)})")
             writeLine(client, Protocol.buildAckOk())
 
             client.soTimeout = 60000
-            outStream.use { out ->
-                val input = inputStream
+            var received = 0L
+            // use 块结束后输出流才关闭：MediaStore 的 IS_PENDING 到这时才清零，文件才对其他 App 可见
+            target.stream.use { out ->
                 val buf = ByteArray(BUF)
-                var received = 0L
                 while (received < header.size) {
                     val want = minOf(buf.size.toLong(), header.size - received).toInt()
-                    val n = input.read(buf, 0, want)
+                    val n = inputStream.read(buf, 0, want)
                     if (n <= 0) break
                     out.write(buf, 0, n)
                     received += n
                     AppState.setProgress(ProgressInfo(TransferDirection.RECEIVE, header.fileName, received, header.size))
                 }
                 out.flush()
-                if (received != header.size) throw java.io.IOException("数据不完整：$received/${header.size}")
-                writeLine(client, Protocol.buildDone(received))
-                pending = false
-                AppState.addRecord(TransferRecord(TransferDirection.RECEIVE, header.fileName, "对方", header.size, true, nowTime()))
-                AppState.log("接收完成：${header.fileName} → $displayPath")
             }
+
+            if (received != header.size) throw java.io.IOException("数据不完整：$received/${header.size}")
+
+            // 先落盘再回 DONE：让对方看到的「完成」意味着文件确实已就位
+            writeLine(client, Protocol.buildDone(received))
+            pending = false
+            AppState.addRecord(TransferRecord(TransferDirection.RECEIVE, header.fileName, remoteIp,
+                header.size, true, nowTime(), target.uri.toString()))
+            AppState.log("接收完成：${header.fileName} → ${target.displayPath}")
         } catch (e: Exception) {
             AppState.log("接收失败：${e.message}")
             AppState.addRecord(TransferRecord(TransferDirection.RECEIVE, "未知", "对方", 0, false, nowTime()))
@@ -202,10 +242,19 @@ class P2PEngine(private val appContext: Context) {
         }
     }
 
+    /** 用户对接收请求的决定。可由界面对话框或通知按钮调用。 */
+    fun respond(requestId: String, accept: Boolean) {
+        val d = pendingDecisions.remove(requestId)
+        if (AppState.pending.value?.id == requestId) AppState.setPending(null)
+        d?.complete(accept)
+    }
+
     // ---------------- TCP 发送 ----------------
     suspend fun sendFile(target: Peer, uri: Uri): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val cr = appContext.contentResolver
         val displayName = queryDisplayName(cr, uri) ?: "文件"
+        // 尽量拿到长期读权限，这样「最近传输」里点开已发送的文件仍可打开
+        try { cr.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (e: Exception) { }
 
         // 部分 Provider 查不到文件大小（statSize=-1）。若直接按 0 发送，
         // 对方会立刻按「0 字节」收完并生成空文件——所以先落到缓存文件量出真实长度。
@@ -234,11 +283,13 @@ class P2PEngine(private val appContext: Context) {
             withTimeout(10_000) { client.connect(InetSocketAddress(target.ip, target.tcpPort), 10_000) }
             writeLine(client, Protocol.buildFileRequest(displayName, size))
 
+            // 对方要先弹窗请你确认，等待时间必须覆盖它的 60 秒确认窗口
             val replyStream = client.getInputStream()
-            val ackLine = withTimeout(10_000) { readLineRaw(replyStream) }
-            if (ackLine == null) return@withContext false to "等待对方应答超时"
+            AppState.log("已发送请求，等待 ${target.name} 确认接收…")
+            val ackLine = withTimeout(ACK_TIMEOUT_MS) { readLineRaw(replyStream) }
+            if (ackLine == null) return@withContext false to "对方未在规定时间内确认"
             val ack = Protocol.parseAck(ackLine)
-            if (!ack.first) return@withContext false to "对方拒绝：${ack.second}"
+            if (!ack.first) return@withContext false to (ack.second.ifBlank { "对方拒绝了本次传输" })
 
             val input = openInput() ?: return@withContext false to "无法打开文件"
             input.use { ins ->
@@ -257,7 +308,8 @@ class P2PEngine(private val appContext: Context) {
                 val recv = doneLine?.let { Protocol.parseDone(it) }
                 if (recv == null || recv != sent) return@withContext false to "对方确认数不符（期望 $sent，实收 $recv）"
             }
-            AppState.addRecord(TransferRecord(TransferDirection.SEND, displayName, target.name, size.coerceAtLeast(0), true, nowTime()))
+            AppState.addRecord(TransferRecord(TransferDirection.SEND, displayName, target.name,
+                size.coerceAtLeast(0), true, nowTime(), uri.toString()))
             AppState.log("发送完成：$displayName → ${target.name}")
             true to "已发送 $displayName"
         } catch (e: Exception) {

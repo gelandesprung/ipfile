@@ -102,6 +102,47 @@ Check("中文文件名", okCn && File.Exists(Path.Combine(recvDir, "合同 2026.
 var okDup = await SendAndWait(small);
 Check("重名不覆盖生成(1)", okDup && File.Exists(Path.Combine(recvDir, "small (1).bin")));
 
+// ---------- 2b. 接收确认：拒绝要通知对方、同意才落盘 ----------
+Console.WriteLine("\n[2b] 接收确认流程");
+var acceptNext = false;
+string? savePathNext = null;
+var askCount = 0;
+using (var confirmRecv = new TransferService(new AppConfig { DeviceName = "ConfirmReceiver", UdpPort = 25012, TcpPort = 25011 }))
+{
+    confirmRecv.ConfirmReceive += req =>
+    {
+        askCount++;
+        Console.WriteLine($"    [confirm] {req.FileName} {req.Size}B 来自 {req.RemoteIp} → {(acceptNext ? "同意" : "拒绝")}{(savePathNext == null ? "" : "，另存到 " + savePathNext)}");
+        return Task.FromResult(new ReceiveDecision(acceptNext, acceptNext ? savePathNext : null));
+    };
+    confirmRecv.Log += m => Console.WriteLine("    [confirm-recv] " + m);
+    confirmRecv.Start();
+    await Task.Delay(300);
+
+    var confirmTarget = new Peer { Name = "ConfirmReceiver", Ip = "127.0.0.1", TcpPort = 25011 };
+    var rejFile = Path.Combine(tmpSend, "reject_me.bin");
+    GenFile(rejFile, 1);
+
+    var rejected = await sender.SendFileAsync(confirmTarget, rejFile);
+    Check("拒绝时发送方收到拒绝原因", !rejected.Item1 && rejected.Item2.Contains("拒绝"), rejected.Item2);
+    Check("拒绝后本地不落文件", !File.Exists(Path.Combine(recvDir, "reject_me.bin")));
+
+    acceptNext = true;
+    var accepted = await sender.SendFileAsync(confirmTarget, rejFile);
+    Check("同意后正常接收并校验内容",
+        accepted.Item1 && File.Exists(Path.Combine(recvDir, "reject_me.bin")) &&
+        Md5(rejFile) == Md5(Path.Combine(recvDir, "reject_me.bin")));
+
+    // 用户自选保存位置
+    savePathNext = Path.Combine(tmpSend, "custom_saved", "另存为的文件.bin");
+    var custom = await sender.SendFileAsync(confirmTarget, rejFile);
+    Check("可自定义保存位置（自动建目录）",
+        custom.Item1 && File.Exists(savePathNext) && Md5(rejFile) == Md5(savePathNext), savePathNext);
+    savePathNext = null;
+
+    Check("每次请求都询问用户", askCount == 3, $"askCount={askCount}");
+}
+
 receiver.Dispose();
 sender.Dispose();
 try { Directory.Delete(tmpSend, true); } catch { }

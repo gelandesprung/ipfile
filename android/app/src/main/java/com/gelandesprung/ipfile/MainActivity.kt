@@ -1,6 +1,7 @@
 package com.gelandesprung.ipfile
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -65,6 +66,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        AppState.setUiVisible(true)
+        // 界面已经能弹确认框了，就不必再用通知打扰
+        getSystemService(NotificationManager::class.java)?.cancel(ReceiveService.ALERT_NOTI_ID)
+    }
+
+    override fun onPause() {
+        AppState.setUiVisible(false)
+        super.onPause()
+    }
+
     private fun requestPermissionsIfNeeded() {
         val need = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -88,6 +101,7 @@ fun AppScreen() {
     val records by AppState.records.collectAsState()
     val progress by AppState.progress.collectAsState()
     val running by AppState.serviceRunning.collectAsState()
+    val pendingReq by AppState.pending.collectAsState()
 
     var showSettings by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
@@ -134,6 +148,29 @@ fun AppScreen() {
                 }) { Text("选择文件") }
             },
             dismissButton = { TextButton(onClick = { showManualDialog = false }) { Text("取消") } }
+        )
+    }
+
+    // 有人发来文件 → 弹确认框，用户不同意就回绝对方
+    pendingReq?.let { p ->
+        AlertDialog(
+            onDismissRequest = { P2PEngineHolder.get(ctx).respond(p.id, false) },
+            title = { Text("收到文件") },
+            text = {
+                Column {
+                    Text(p.fileName, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    Text("${NetUtils.formatSize(p.size)} · 来自 ${p.peerIp}", fontSize = 12.sp, color = C.Gray)
+                    Spacer(Modifier.height(10.dp))
+                    Text("60 秒内未选择将自动拒绝", fontSize = 11.sp, color = C.Amber)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { P2PEngineHolder.get(ctx).respond(p.id, true) }) { Text("接收") }
+            },
+            dismissButton = {
+                TextButton(onClick = { P2PEngineHolder.get(ctx).respond(p.id, false) }) { Text("拒绝") }
+            }
         )
     }
 
@@ -218,7 +255,7 @@ fun AppScreen() {
             if (records.isEmpty()) {
                 item { Text("暂无记录", fontSize = 12.sp, color = C.Gray, modifier = Modifier.padding(8.dp)) }
             }
-            items(records.take(5)) { rec -> RecordRow(rec) }
+            items(records.take(5)) { rec -> RecordRow(rec, onOpen = { openRecord(ctx, rec) }) }
             item { Spacer(Modifier.height(24.dp)) }
         }
     }
@@ -276,8 +313,13 @@ fun DeviceCard(peer: Peer, onLongClick: (Peer) -> Unit) {
 }
 
 @Composable
-fun RecordRow(rec: TransferRecord) {
-    Card(colors = CardDefaults.cardColors(containerColor = C.Card), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+fun RecordRow(rec: TransferRecord, onOpen: () -> Unit) {
+    val canOpen = !rec.uri.isNullOrEmpty() && rec.success
+    Card(
+        colors = CardDefaults.cardColors(containerColor = C.Card),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth().clickable { if (canOpen) onOpen() }
+    ) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 if (rec.direction == TransferDirection.RECEIVE) Icons.Default.Download else Icons.Default.Upload,
@@ -287,10 +329,40 @@ fun RecordRow(rec: TransferRecord) {
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text("${if (rec.direction == TransferDirection.RECEIVE) "收到" else "发送"} ${rec.fileName}", fontSize = 13.sp)
-                Text("${rec.peerName} · ${rec.time}", fontSize = 10.sp, color = C.Gray)
+                Text(
+                    "${rec.peerName} · ${rec.time}" + if (canOpen) " · 点击打开" else "",
+                    fontSize = 10.sp, color = C.Gray
+                )
             }
-            Text(if (rec.success) "完成" else "失败", fontSize = 11.sp, color = if (rec.success) C.Green else C.Red)
+            Text(
+                if (rec.success) "完成" else "失败",
+                fontSize = 11.sp,
+                color = if (rec.success) C.Green else C.Red
+            )
         }
+    }
+}
+
+/** 用系统默认应用打开这条记录对应的文件。 */
+fun openRecord(ctx: Context, rec: TransferRecord) {
+    val uriStr = rec.uri
+    if (uriStr.isNullOrEmpty()) {
+        Toast.makeText(ctx, "该记录没有可打开的文件", Toast.LENGTH_SHORT).show()
+        return
+    }
+    try {
+        val uri = Uri.parse(uriStr)
+        // 优先按扩展名给类型：接收时保存的 MIME 可能已被写成通用二进制
+        val guessed = NetUtils.mimeOf(rec.fileName)
+        val mime = if (guessed != "application/octet-stream") guessed
+        else (ctx.contentResolver.getType(uri) ?: "application/octet-stream")
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mime)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        ctx.startActivity(intent)
+    } catch (e: Exception) {
+        Toast.makeText(ctx, "没有能打开该文件的应用", Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -393,7 +465,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                         ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
                     } catch (e: Exception) { "?" }
                     Text("飞鸽 P2P · v$ver", fontSize = 12.sp, color = C.Gray)
-                    Text("build 2026-11-20-d · 修复设备消失", fontSize = 11.sp, color = C.Gray)
+                    Text("build 2026-11-20-e · 接收需确认", fontSize = 11.sp, color = C.Gray)
                 }
             }
         }

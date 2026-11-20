@@ -17,7 +17,18 @@ data class TransferRecord(
     val peerName: String,
     val size: Long,
     val success: Boolean,
-    val time: String
+    val time: String,
+    /** 可打开的文件 Uri（收到的文件为保存位置，发出的文件为原文件）。 */
+    val uri: String? = null
+)
+
+/** 等待用户确认的接收请求（60 秒内不处理即视为拒绝）。 */
+data class PendingRequest(
+    val id: String,
+    val fileName: String,
+    val size: Long,
+    val peerIp: String,
+    val expireAt: Long
 )
 
 data class ProgressInfo(val direction: TransferDirection, val fileName: String, val done: Long, val total: Long)
@@ -61,6 +72,16 @@ object AppState {
     private val _serviceRunning = MutableStateFlow(false)
     val serviceRunning: StateFlow<Boolean> = _serviceRunning.asStateFlow()
     fun setServiceRunning(v: Boolean) { _serviceRunning.value = v }
+
+    /** 待用户确认的接收请求；非空时 UI 弹确认框、服务发通知。 */
+    private val _pending = MutableStateFlow<PendingRequest?>(null)
+    val pending: StateFlow<PendingRequest?> = _pending.asStateFlow()
+    fun setPending(p: PendingRequest?) { _pending.value = p }
+
+    /** App 界面是否在前台：前台时用对话框确认，后台时用通知确认。 */
+    private val _uiVisible = MutableStateFlow(false)
+    val uiVisible: StateFlow<Boolean> = _uiVisible.asStateFlow()
+    fun setUiVisible(v: Boolean) { _uiVisible.value = v }
 
     private val peerTimes = mutableMapOf<String, Long>()
 

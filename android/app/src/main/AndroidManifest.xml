@@ -37,6 +37,17 @@
             android:name=".ReceiveService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- 让「最近传输」里的文件能被系统应用打开（Android 9 及以下的本地文件） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

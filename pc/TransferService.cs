@@ -13,8 +13,6 @@ public sealed class TransferService : IDisposable
     private readonly AppConfig _config;
     private readonly TcpListener _listener;
     private readonly CancellationTokenSource _cts = new();
-    private const int BufferSize = 64 * 1024;
-    private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(10);
 
     // 事件：(方向, 文件名, 对端名, 大小, 是否成功, 说明)
     public event Action<string, string, string, long, bool, string>? TransferFinished;
@@ -22,6 +20,15 @@ public sealed class TransferService : IDisposable
     public event Action<string, string, long, long>? Progress;
     // 通用日志
     public event Action<string>? Log;
+    // 接收确认：收到发文件请求时询问用户是否接收，并带回用户选择的保存位置。无人订阅则按自动接收处理。
+    public event Func<IncomingRequest, Task<ReceiveDecision>>? ConfirmReceive;
+
+    private const int BufferSize = 64 * 1024;
+    private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(10);
+    /// <summary>接收方等待用户点「接收/拒绝」的最长时间，超时按拒绝处理。</summary>
+    private static readonly TimeSpan ConfirmTimeout = TimeSpan.FromSeconds(60);
+    /// <summary>发送方等待对方应答的时间，必须长于接收方的确认窗口。</summary>
+    private static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(90);
 
     public TransferService(AppConfig config)
     {
@@ -78,11 +85,66 @@ public sealed class TransferService : IDisposable
             fileName = Path.GetFileName(fileName.Replace('\\', '/'));
             if (string.IsNullOrWhiteSpace(fileName)) fileName = "未命名文件";
 
-            var dir = AppConfig.ReceiveDirectory;
-            var finalPath = NonOverwritePath(dir, fileName);
+            var remoteIp = ep?.Address.ToString() ?? "对方";
+
+            // － 接收确认：先问用户，同意才建文件、才回 ACK OK －
+            var decision = new ReceiveDecision(true);
+            var confirm = ConfirmReceive;
+            if (confirm != null)
+            {
+                Log?.Invoke($"收到发送请求：{fileName} ({FormatSize(size)}) 来自 {remoteIp}，等待确认…");
+                try
+                {
+                    var ask = confirm(new IncomingRequest(fileName, size, remoteIp));
+                    var finished = await Task.WhenAny(ask, Task.Delay(ConfirmTimeout));
+                    decision = finished == ask ? await ask : new ReceiveDecision(false);
+                }
+                catch (Exception ex)
+                {
+                    Log?.Invoke($"接收确认异常：{ex.Message}");
+                    decision = new ReceiveDecision(false);
+                }
+            }
+            else
+            {
+                Log?.Invoke($"收到发送请求：{fileName} ({FormatSize(size)})");
+            }
+
+            if (!decision.Accept)
+            {
+                try
+                {
+                    var reject = Encoding.UTF8.GetBytes(Protocol.BuildAckReject("对方拒绝接收"));
+                    await stream.WriteAsync(reject);
+                }
+                catch { /* 对方可能已超时断开，不影响结论 */ }
+                Log?.Invoke($"已拒绝接收：{fileName}（已通知对方）");
+                TransferFinished?.Invoke("收到", fileName, remoteIp, size, false, "已拒绝接收");
+                return;
+            }
+
+            // 保存位置：用户在确认框里指定的优先，否则用默认收件夹（自动避免覆盖）
+            string finalPath;
+            if (!string.IsNullOrWhiteSpace(decision.SavePath))
+            {
+                finalPath = decision.SavePath!;
+                try
+                {
+                    var parent = Path.GetDirectoryName(finalPath);
+                    if (!string.IsNullOrWhiteSpace(parent)) Directory.CreateDirectory(parent);
+                }
+                catch (Exception ex)
+                {
+                    Log?.Invoke($"创建保存目录失败：{ex.Message}，改用默认收件夹");
+                    finalPath = NonOverwritePath(AppConfig.ReceiveDirectory, fileName);
+                }
+            }
+            else
+            {
+                finalPath = NonOverwritePath(AppConfig.ReceiveDirectory, fileName);
+            }
             tempPath = finalPath + ".part";
 
-            Log?.Invoke($"收到发送请求：{fileName} ({FormatSize(size)})");
             var ack = Encoding.UTF8.GetBytes(Protocol.BuildAckOk());
             await stream.WriteAsync(ack);
 
@@ -105,11 +167,14 @@ public sealed class TransferService : IDisposable
                 await fs.FlushAsync();
             } // 文件流已关闭，锁释放
 
+            // 先落盘再回 DONE：让发送方的「完成」意味着文件确实已就位
+            // 用户自己指定过路径时允许覆盖（保存对话框里已确认过）；否则绝不覆盖同名文件
+            File.Move(tempPath, finalPath, overwrite: !string.IsNullOrWhiteSpace(decision.SavePath));
+            tempPath = "";
+
             var done = Encoding.UTF8.GetBytes(Protocol.BuildDone(received));
             await stream.WriteAsync(done);
 
-            File.Move(tempPath, finalPath, overwrite: false);
-            tempPath = "";
             Log?.Invoke($"接收完成：{fileName} → {finalPath}");
             TransferFinished?.Invoke("收到", fileName, "对方", size, true, finalPath);
         }
@@ -149,10 +214,13 @@ public sealed class TransferService : IDisposable
             var header = Encoding.UTF8.GetBytes(Protocol.BuildFileRequest(fileName, size));
             await stream.WriteAsync(header);
 
-            var ackLine = await ReadLineAsync(stream, HandshakeTimeout);
-            if (ackLine == null) return (false, "等待对方应答超时");
+            // 对方要先弹窗询问用户是否接收，等待时间必须覆盖它的 60 秒确认窗口
+            Log?.Invoke($"已发送请求，等待 {target.Name} 确认接收…");
+            client.ReceiveTimeout = (int)AckTimeout.TotalMilliseconds;
+            var ackLine = await ReadLineAsync(stream, AckTimeout);
+            if (ackLine == null) return (false, "对方未在规定时间内确认接收");
             if (!Protocol.ParseAck(ackLine, out var reason))
-                return (false, $"对方拒绝：{reason}");
+                return (false, string.IsNullOrWhiteSpace(reason) ? "对方拒绝了本次传输" : $"对方拒绝：{reason}");
 
             // 传输阶段
             client.ReceiveTimeout = 60000;
