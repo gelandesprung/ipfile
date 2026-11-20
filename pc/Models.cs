@@ -35,12 +35,25 @@ public sealed record ReceiveDecision(bool Accept, string? SavePath = null);
 /// <summary>一条传输记录（会话内显示）。</summary>
 public sealed record TransferRecord(string Direction, string Name, string PeerName, string Status, DateTime Time);
 
+/// <summary>最近传输的一个文件，点击可打开其所在位置。</summary>
+public sealed class RecentItem
+{
+    public string Path { get; set; } = "";
+    public string Name { get; set; } = "";
+    public long Size { get; set; }
+    public bool Received { get; set; }
+    public DateTime Time { get; set; } = DateTime.Now;
+}
+
 /// <summary>本地配置，JSON 持久化到 %APPDATA%/FeigeP2P/config.json。</summary>
 public sealed class AppConfig
 {
     public string DeviceName { get; set; } = Environment.MachineName;
     public int UdpPort { get; set; } = 2425;
     public int TcpPort { get; set; } = 2425;
+
+    /// <summary>最近传输的文件（最多 5 条，最新在前），关掉程序再打开还在。</summary>
+    public List<RecentItem> Recent { get; set; } = new();
 
     private static string Dir => System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FeigeP2P");
@@ -54,7 +67,11 @@ public sealed class AppConfig
             {
                 var cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath));
                 if (cfg != null && cfg.UdpPort > 0 && cfg.TcpPort > 0 && !string.IsNullOrWhiteSpace(cfg.DeviceName))
+                {
+                    cfg.Recent ??= new List<RecentItem>();
+                    cfg.Recent.RemoveAll(r => r == null || string.IsNullOrWhiteSpace(r.Path));
                     return cfg;
+                }
             }
         }
         catch { /* 配置损坏则用默认值 */ }

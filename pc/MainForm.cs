@@ -15,6 +15,8 @@ public sealed class MainForm : Form
     private readonly Label _onlineDot = new();
     private readonly ListView _devices = new();
     private readonly Label _emptyHint = new();
+    private readonly ListView _recent = new();
+    private readonly Label _recentEmpty = new();
     private readonly RichTextBox _log = new();
     private readonly Button _clearLogBtn = new();
     private readonly ProgressBar _progress = new();
@@ -25,6 +27,12 @@ public sealed class MainForm : Form
     private readonly ToolStripMenuItem _menuCopyIp;
     private readonly ToolStripMenuItem _menuRefresh;
     private readonly ToolStripMenuItem _menuManual;
+    private readonly NotifyIcon _tray = new();
+    private readonly ToolStripMenuItem _menuOpenFolder = new("打开收件夹");
+
+    /// <summary>真正的退出标志：点窗口关闭键只是收进托盘，只有托盘「退出」才结束进程。</summary>
+    private bool _reallyExit;
+    private bool _trayHintShown;
 
     private Peer? _menuTarget;
     private string _lastLog = "";
@@ -43,6 +51,7 @@ public sealed class MainForm : Form
 
         BuildUi();
         WireEvents();
+        BuildTray();
 
         // 两个服务分别启动：任一失败都要给出明确原因，而不是整个程序闪退
         string? tcpError = null, udpError = null;
@@ -71,11 +80,15 @@ public sealed class MainForm : Form
     private void BuildUi()
     {
         Text = "飞鸽 P2P · 局域网互传";
-        Size = new Size(1040, 680);
-        MinimumSize = new Size(820, 540);
+        // 下面的尺寸都是 96 DPI 的设计值，AutoScaleMode.None + 手工 Scale 会整体放大
+        Size = new Size(920, 660);
+        MinimumSize = new Size(760, 560);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(245, 246, 248);
         Font = new Font("微软雅黑", 9F);
+        // 自己按 DPI 等比缩放整套坐标：交给 WinForms 的自动缩放时，这台 200% 的机器上
+        // 只放大了窗口、没放大行高，文字就会互相压叠。设计基准是 96 DPI。
+        AutoScaleMode = AutoScaleMode.None;
 
         // 根容器：3 行（顶部信息 / 主体 / 底部进度）
         var root = new TableLayoutPanel
@@ -84,7 +97,7 @@ public sealed class MainForm : Form
             Padding = Padding.Empty, Margin = Padding.Empty
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66F));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 76F));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
         Controls.Add(root);
@@ -93,10 +106,53 @@ public sealed class MainForm : Form
         root.Controls.Add(BuildBody(), 0, 1);
         root.Controls.Add(BuildBottom(), 0, 2);
 
-        // 顶部条高度按字体实测结果计算，高 DPI 下也不会把名称压到副标题上
-        var topHeight = _nameLabel.PreferredHeight + _localInfo.PreferredHeight + 28;
-        root.RowStyles[0].Height = Math.Max(72, topHeight);
+        // 一次性把整套坐标按 DPI 等比放大（含行高、边距、控件尺寸），字号本来就会随 DPI 放大，
+        // 这样两者始终同比例，任何缩放下都不会挤在一起。
+        var scale = DeviceDpi / 96f;
+        if (scale > 1.01f) Scale(new SizeF(scale, scale));
+
         root.PerformLayout();
+    }
+
+    /// <summary>把 96 DPI 的设计像素换算成当前 DPI 的实际像素（用于 ListView 行高这类不会自动缩放的值）。</summary>
+    private int D(int design) => (int)Math.Round(design * DeviceDpi / 96.0);
+
+    /// <summary>窗口真正显示后再把日志对齐到末尾：布局完成前滚动位置会算错，导致顶部露出半行。</summary>
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        ScrollLogToEnd();
+    }
+
+    /// <summary>
+    /// 用 EM_LINESCROLL 往文件末尾滚：内容超出时贴底，没超出时自动夹到顶部，
+    /// 不像 ScrollToCaret 那样会在可视区放得下时留下残行。
+    /// </summary>
+    private void ScrollLogToEnd()
+    {
+        if (!_log.IsHandleCreated) return;
+        SendMessage(_log.Handle, EM_LINESCROLL, IntPtr.Zero, (IntPtr)(-10000));
+        // 末尾多一个空行（每条日志都以换行结束），回退一行让最后一条完整可见
+        SendMessage(_log.Handle, EM_LINESCROLL, IntPtr.Zero, (IntPtr)1);
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    private const int EM_LINESCROLL = 0x00B6;
+
+    /// <summary>窗口开出来不能超出屏幕工作区（高缩放下 1.5 倍尺寸很容易超出）。</summary>
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        var wa = Screen.FromControl(this).WorkingArea;
+        var w = Math.Min(Width, (int)(wa.Width * 0.94));
+        var h = Math.Min(Height, (int)(wa.Height * 0.94));
+        if (w != Width || h != Height) Size = new Size(w, h);
+        if (Left < wa.Left || Top < wa.Top || Left > wa.Right - 100 || Top > wa.Bottom - 100)
+        {
+            Left = wa.Left + (wa.Width - Width) / 2;
+            Top = wa.Top + (wa.Height - Height) / 2;
+        }
     }
 
     private Control BuildTop()
@@ -144,7 +200,8 @@ public sealed class MainForm : Form
     /// <summary>顶部条定位：右侧状态贴右，名称与副标题纵向堆叠，按实测高度排布。</summary>
     private void LayoutTopBar(Panel host)
     {
-        const int padX = 22;
+        // 运行期算出来的坐标不会被自动缩放，设计值要自己换算
+        var padX = D(22);
         var right = host.ClientSize.Width - padX;
 
         _onlineDot.Location = new Point(
@@ -153,14 +210,14 @@ public sealed class MainForm : Form
 
         if (_nameBox.Visible)
         {
-            var maxW = Math.Max(160, _onlineDot.Left - padX - 20);
-            _nameBox.Width = Math.Min(320, maxW);
-            _nameBox.Location = new Point(padX, Math.Max(8, (host.ClientSize.Height - _nameBox.Height) / 2));
+            var maxW = Math.Max(D(160), _onlineDot.Left - padX - D(20));
+            _nameBox.Width = Math.Min(D(320), maxW);
+            _nameBox.Location = new Point(padX, Math.Max(D(8), (host.ClientSize.Height - _nameBox.Height) / 2));
         }
         else
         {
-            _nameLabel.Location = new Point(padX, 10);
-            _localInfo.Location = new Point(padX, _nameLabel.Bottom + 2);
+            _nameLabel.Location = new Point(padX, D(10));
+            _localInfo.Location = new Point(padX, _nameLabel.Bottom + D(2));
         }
     }
 
@@ -183,13 +240,12 @@ public sealed class MainForm : Form
     {
         var left = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3,
+            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2,
             Margin = new Padding(0, 0, 6, 0), Padding = Padding.Empty, BackColor = Color.White
         };
         left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
         left.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
 
         // 标题行也用 grid，避免 Width 计算导致副标题被裁
         var head = new TableLayoutPanel
@@ -229,7 +285,7 @@ public sealed class MainForm : Form
         _devices.Columns.Add("端口", 70);
         _deviceMenu.Items.AddRange(new ToolStripItem[]
         {
-            _menuSend, _menuCopyIp, new ToolStripSeparator(), _menuManual, _menuRefresh
+            _menuSend, _menuCopyIp, new ToolStripSeparator(), _menuOpenFolder, _menuManual, _menuRefresh
         });
         _deviceMenu.Opening += DeviceMenu_Opening;
 
@@ -248,18 +304,6 @@ public sealed class MainForm : Form
         _emptyHint.ContextMenuStrip = _deviceMenu;
         left.Controls.Add(listHost, 0, 1);
 
-        var folderBar = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.White, Padding = new Padding(12, 7, 12, 7) };
-        var openFolder = new Button
-        {
-            Text = "打开收件夹", Dock = DockStyle.Fill, FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(246, 249, 253), ForeColor = Color.FromArgb(40, 96, 168),
-            Font = new Font("微软雅黑", 9.5F), Cursor = Cursors.Hand
-        };
-        openFolder.FlatAppearance.BorderColor = Color.FromArgb(206, 218, 234);
-        openFolder.Click += (_, _) => OpenReceiveFolder();
-        folderBar.Controls.Add(openFolder);
-        left.Controls.Add(folderBar, 0, 2);
-
         // 列宽按列表实际宽度分配（用 SizeChanged 而不是窗体 Resize，避免拿到未布局的宽度）
         void FitColumns()
         {
@@ -277,46 +321,121 @@ public sealed class MainForm : Form
     {
         var right = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2,
+            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4,
             Margin = new Padding(6, 0, 0, 0), Padding = Padding.Empty, BackColor = Color.White
         };
         right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
-        right.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));   // 「最近传输」标题
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 148F));  // 最近 5 条
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));   // 「传输日志」标题
+        right.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));   // 日志正文
 
-        var head = new TableLayoutPanel
+        right.Controls.Add(SectionHead("最近传输", "点击打开所在位置", null), 0, 0);
+
+        _recent.View = View.Details;
+        _recent.HeaderStyle = ColumnHeaderStyle.None;
+        _recent.FullRowSelect = true;
+        _recent.MultiSelect = false;
+        _recent.HideSelection = true;
+        _recent.ShowItemToolTips = true;
+        _recent.BorderStyle = BorderStyle.None;
+        _recent.BackColor = Color.White;
+        _recent.Dock = DockStyle.Fill;
+        _recent.Font = new Font("微软雅黑", 9F);
+        // Details 视图的行高只能靠小图标列表撑开：1×28 的透明图像即每行 28px（随 DPI 换算）
+        _recent.SmallImageList = new ImageList { ImageSize = new Size(1, D(28)) };
+        _recent.Columns.Add("文件", 210);
+        _recent.Columns.Add("大小", 62, HorizontalAlignment.Right);
+        _recent.Columns.Add("时间", 46, HorizontalAlignment.Right);
+        _recent.MouseClick += (_, e) =>
         {
-            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
-            Margin = Padding.Empty, Padding = new Padding(14, 0, 14, 0)
+            var hit = _recent.GetItemAt(e.X, e.Y);
+            if (hit?.Tag is string path) OpenFileLocation(path);
         };
-        head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        head.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-        var logTitle = new Label
+        _recent.MouseMove += (_, e) =>
         {
-            Text = "传输日志", Font = new Font("微软雅黑", 11F, FontStyle.Bold),
-            ForeColor = Color.FromArgb(40, 46, 54), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft
+            var over = _recent.GetItemAt(e.X, e.Y) != null;
+            Cursor = over ? Cursors.Hand : Cursors.Default;
         };
+        _recent.MouseLeave += (_, _) => Cursor = Cursors.Default;
+
+        _recentEmpty.Text = "还没有传输记录\n\n收发的文件会显示在这里，最多保留 5 条";
+        _recentEmpty.TextAlign = ContentAlignment.MiddleCenter;
+        _recentEmpty.ForeColor = Color.FromArgb(170, 175, 182);
+        _recentEmpty.Font = new Font("微软雅黑", 9F);
+        _recentEmpty.Dock = DockStyle.Fill;
+
+        var recentHost = new Panel { Dock = DockStyle.Fill, Margin = new Padding(10, 0, 10, 8), BackColor = Color.White };
+        recentHost.Controls.Add(_recent);
+        recentHost.Controls.Add(_recentEmpty);
+        _recentEmpty.BringToFront();
+        right.Controls.Add(recentHost, 0, 1);
+
         _clearLogBtn.Text = "清空";
         _clearLogBtn.Font = new Font("微软雅黑", 8.5F);
         _clearLogBtn.ForeColor = Color.FromArgb(120, 128, 138);
         _clearLogBtn.FlatStyle = FlatStyle.Flat;
         _clearLogBtn.FlatAppearance.BorderSize = 0;
         _clearLogBtn.BackColor = Color.Transparent;
-        _clearLogBtn.Dock = DockStyle.Fill;
+        _clearLogBtn.Size = new Size(40, 22);
+        _clearLogBtn.Cursor = Cursors.Hand;
         _clearLogBtn.Click += (_, _) => _log.Clear();
-        head.Controls.Add(logTitle, 0, 0);
-        head.Controls.Add(_clearLogBtn, 1, 0);
-        right.Controls.Add(head, 0, 0);
+        right.Controls.Add(SectionHead("传输日志", null, _clearLogBtn), 0, 2);
 
         _log.Dock = DockStyle.Fill;
         _log.ReadOnly = true;
         _log.BorderStyle = BorderStyle.None;
         _log.BackColor = Color.White;
         _log.Font = new Font("Consolas", 9.5F);
-        _log.Margin = new Padding(10, 0, 10, 8);
-        right.Controls.Add(_log, 0, 1);
+        _log.Margin = new Padding(10, 4, 10, 8);
+        right.Controls.Add(_log, 0, 3);
+
+        void FitRecentColumns()
+        {
+            // ListView 的列宽不是控件，不会随 DPI 缩放，这里自己换算
+            int w = Math.Max(_recent.ClientSize.Width - D(4), D(160));
+            var sizeW = D(70);
+            var timeW = D(58);
+            _recent.Columns[2].Width = timeW;
+            _recent.Columns[1].Width = sizeW;
+            _recent.Columns[0].Width = Math.Max(D(80), w - sizeW - timeW);
+        }
+        _recent.SizeChanged += (_, _) => FitRecentColumns();
+        FitRecentColumns();
         return right;
+    }
+
+    /// <summary>分区标题行：左侧标题，右侧可选提示文字与操作控件。</summary>
+    private static TableLayoutPanel SectionHead(string title, string? hint, Control? action)
+    {
+        var head = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1,
+            Margin = Padding.Empty, Padding = new Padding(14, 0, 12, 0), BackColor = Color.White
+        };
+        head.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        head.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+        head.Controls.Add(new Label
+        {
+            Text = title, Font = new Font("微软雅黑", 11F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(40, 46, 54), Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft
+        }, 0, 0);
+
+        if (!string.IsNullOrEmpty(hint))
+        {
+            head.Controls.Add(new Label
+            {
+                Text = hint, Font = new Font("微软雅黑", 8.5F), AutoSize = true,
+                ForeColor = Color.FromArgb(150, 156, 164), Anchor = AnchorStyles.Right
+            }, 1, 0);
+        }
+
+        if (action != null) head.Controls.Add(action, 2, 0);
+        return head;
     }
 
     private Control BuildBottom()
@@ -332,6 +451,7 @@ public sealed class MainForm : Form
         _progress.Maximum = 1000;
         _progress.Value = 0;
         _progress.Style = ProgressBarStyle.Continuous;
+        _progress.Visible = false;   // 空闲时不显示进度条，避免底部多出一条空槽
         bottom.Controls.Add(_progressLabel);
         bottom.Controls.Add(_progress);
         var line = new Panel { Dock = DockStyle.Top, Height = 1, BackColor = Color.FromArgb(224, 228, 233), Margin = Padding.Empty };
@@ -398,7 +518,9 @@ public sealed class MainForm : Form
                     }
                     break;
             }
+            // 空状态与列表互斥显示：透明标签叠在 ListView 上在部分环境画不出来
             _emptyHint.Visible = _devices.Items.Count == 0;
+            _devices.Visible = !_emptyHint.Visible;
         });
 
         _discovery.Diag += msg => Ui(() => AppendLogDiag(msg));
@@ -407,16 +529,20 @@ public sealed class MainForm : Form
         _transfer.Progress += (dir, name, done, total) => Ui(() =>
         {
             var pct = total > 0 ? (int)(1000.0 * done / total) : 0;
+            if (!_progress.Visible) _progress.Visible = true;
             _progress.Value = Math.Min(1000, Math.Max(0, pct));
             _progressLabel.Text = $"{dir} {name}  {TransferService.FormatSize(done)}/{TransferService.FormatSize(total)}  {pct / 10}%";
         });
         _transfer.TransferFinished += (dir, name, peer, size, ok, msg) => Ui(() =>
         {
+            _progress.Visible = false;
             if (ok)
             {
                 AppendLog($"✓ {dir} {name} 完成", Color.FromArgb(25, 140, 60));
                 _progress.Value = 1000;
                 _progressLabel.Text = $"{dir} {name} 完成 · {TransferService.FormatSize(size)}";
+                // 接收成功的 msg 就是落盘路径；发送在 SendFilesToAsync 里单独登记
+                if (dir == "收到" && msg.Length > 0) AddRecent(msg, name, size, true);
             }
             else
             {
@@ -425,7 +551,23 @@ public sealed class MainForm : Form
             }
         });
 
-        FormClosing += (_, _) => { _discovery.Dispose(); _transfer.Dispose(); };
+        _menuOpenFolder.Click += (_, _) => OpenReceiveFolder();
+
+        RefreshRecent();
+
+        FormClosing += (_, e) =>
+        {
+            // 关闭键只收进托盘：传输服务继续跑，随时还能接收文件
+            if (!_reallyExit)
+            {
+                e.Cancel = true;
+                HideToTray();
+                return;
+            }
+            _tray.Visible = false;
+            _discovery.Dispose();
+            _transfer.Dispose();
+        };
     }
 
     /// <summary>收到发文件请求：在 UI 线程弹确认框（可选另存位置），用户点「接收」才返回同意。</summary>
@@ -436,6 +578,8 @@ public sealed class MainForm : Form
         {
             try
             {
+                // 收在托盘里也要能把确认框弹出来，否则对方会一直等到超时
+                if (!Visible) ShowFromTray();
                 if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
                 Activate();
                 using var dlg = new ReceiveConfirmDialog(req) { Owner = this };
@@ -498,7 +642,8 @@ public sealed class MainForm : Form
             _progress.Value = 0;
             AppendLog($"开始发送：{Path.GetFileName(file)} → {target.Name}", Color.FromArgb(30, 100, 180));
             var (ok, msg) = await _transfer.SendFileAsync(target, file);
-            if (!ok) AppendLog(msg, Color.FromArgb(190, 40, 40));
+            if (ok) AddRecent(file, Path.GetFileName(file), new FileInfo(file).Length, false);
+            else AppendLog(msg, Color.FromArgb(190, 40, 40));
         }
     }
 
@@ -545,6 +690,146 @@ public sealed class MainForm : Form
         catch (Exception ex) { AppendLog($"打开收件夹失败：{ex.Message}", Color.FromArgb(190, 40, 40)); }
     }
 
+    /// <summary>在资源管理器中选中该文件；文件已被移走时退回到打开其所在目录。</summary>
+    private void OpenFileLocation(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                    "explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+                return;
+            }
+
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", dir) { UseShellExecute = true });
+                AppendLog($"文件已不在原处，已打开所在目录：{dir}", Color.FromArgb(180, 130, 20));
+                return;
+            }
+
+            AppendLog($"找不到文件：{path}", Color.FromArgb(190, 40, 40));
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"打开位置失败：{ex.Message}", Color.FromArgb(190, 40, 40));
+        }
+    }
+
+    /// <summary>登记一条最近传输（最新在前，最多 5 条），并立即刷新列表。</summary>
+    private void AddRecent(string path, string name, long size, bool received)
+    {
+        _config.Recent.RemoveAll(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
+        _config.Recent.Insert(0, new RecentItem
+        {
+            Path = path, Name = name, Size = size, Received = received, Time = DateTime.Now
+        });
+        while (_config.Recent.Count > MaxRecent) _config.Recent.RemoveAt(_config.Recent.Count - 1);
+        _config.Save();
+        Ui(RefreshRecent);
+    }
+
+    private const int MaxRecent = 5;
+
+    private void RefreshRecent()
+    {
+        // 有的文件可能已被用户移走或删掉：仍然显示，点开时再提示找不到
+        _recent.BeginUpdate();
+        try
+        {
+            _recent.Items.Clear();
+            foreach (var r in _config.Recent.Take(MaxRecent))
+            {
+                var item = new ListViewItem((r.Received ? "↓ " : "↑ ") + r.Name)
+                {
+                    Tag = r.Path,
+                    ToolTipText = $"{r.Path}\n{r.Time:MM-dd HH:mm}",
+                    ForeColor = r.Received ? Color.FromArgb(30, 100, 180) : Color.FromArgb(30, 120, 80)
+                };
+                item.SubItems.Add(TransferService.FormatSize(r.Size));
+                item.SubItems.Add(r.Time.ToString("HH:mm"));
+                _recent.Items.Add(item);
+            }
+        }
+        finally { _recent.EndUpdate(); }
+
+        _recentEmpty.Visible = _recent.Items.Count == 0;
+        _recent.Visible = !_recentEmpty.Visible;
+    }
+
+    // ---------------- 托盘 ----------------
+
+    private void BuildTray()
+    {
+        _tray.Text = $"飞鸽 P2P · {_config.DeviceName}";
+        _tray.Icon = BuildTrayIcon();
+        _tray.Visible = true;
+        _tray.DoubleClick += (_, _) => ShowFromTray();
+
+        var menu = new ContextMenuStrip { Font = new Font("微软雅黑", 9F) };
+        menu.Items.Add(new ToolStripMenuItem("打开主界面", null, (_, _) => ShowFromTray()) { Font = new Font("微软雅黑", 9F, FontStyle.Bold) });
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(new ToolStripMenuItem("退出飞鸽 P2P", null, (_, _) => ExitApp()));
+        _tray.ContextMenuStrip = menu;
+    }
+
+    private void HideToTray()
+    {
+        Hide();
+        if (_trayHintShown) return;
+        _trayHintShown = true;
+        _tray.ShowBalloonTip(3000, "飞鸽 P2P 仍在后台运行",
+            "点右上角关闭只是收进托盘，仍可接收文件。要彻底退出请右键托盘图标选「退出」。", ToolTipIcon.Info);
+        AppendLog("窗口已收进托盘，仍可接收文件；彻底退出请右键托盘图标选「退出」", Color.FromArgb(180, 130, 20));
+    }
+
+    private void ShowFromTray()
+    {
+        Show();
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        Activate();
+        BringToFront();
+    }
+
+    private void ExitApp()
+    {
+        _reallyExit = true;
+        Close();
+    }
+
+    /// <summary>程序没有自带 .ico，运行时画一个：蓝底白字的小图标。</summary>
+    private static Icon BuildTrayIcon()
+    {
+        using var bmp = new Bitmap(32, 32);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            using var bg = new SolidBrush(Color.FromArgb(30, 111, 217));
+            g.FillEllipse(bg, 0, 0, 31, 31);
+            using var fg = new SolidBrush(Color.White);
+            using var font = new Font("微软雅黑", 17F, FontStyle.Bold, GraphicsUnit.Pixel);
+            using var fmt = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            g.DrawString("飞", font, fg, new RectangleF(0, 1, 31, 31), fmt);
+        }
+
+        var handle = bmp.GetHicon();
+        try
+        {
+            using var tmp = Icon.FromHandle(handle);
+            return (Icon)tmp.Clone(); // 克隆后就不依赖这个句柄，可以安全销毁
+        }
+        finally
+        {
+            DestroyIcon(handle);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool DestroyIcon(IntPtr handle);
+
     private void AppendLog(string msg, Color color)
     {
         Ui(() =>
@@ -556,7 +841,7 @@ public sealed class MainForm : Form
             _log.SelectionStart = _log.TextLength;
             _log.SelectionColor = color;
             _log.AppendText($"[{now:HH:mm:ss}] {msg}{Environment.NewLine}");
-            _log.ScrollToCaret();
+            ScrollLogToEnd();
         });
     }
 
@@ -612,17 +897,25 @@ internal sealed class InputDialog : Form
     }
 }
 
-/// <summary>接收确认对话框：显示文件名/大小/来源，可选保存位置；60 秒不操作自动拒绝。</summary>
+/// <summary>
+/// 接收确认对话框：显示文件名/大小/来源，点「接收」即弹出保存位置选择，选好才开始接收。
+/// 所有行高都由实测文字尺寸决定（AutoSize），并关闭 WinForms 的字体坐标缩放，
+/// 这样在 125%/150% 缩放下也不会出现文字互相压叠、右侧被裁的情况。
+/// 60 秒不操作按拒绝处理并通知对方。
+/// </summary>
 internal sealed class ReceiveConfirmDialog : Form
 {
+    private const int ConfirmSeconds = 60;
+    private const int TextWidth = 420;      // 文本折行宽度，窗口宽度由此确定
+    private static string? _lastDir;        // 本次运行内记住上次选的目录
+
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
     private readonly Label _countdown = new();
-    private readonly Label _pathLabel = new();
     private readonly IncomingRequest _req;
-    private int _left = 60;
+    private int _left = ConfirmSeconds;
     private string _savePath;
 
-    /// <summary>用户选定的保存路径（默认即收件夹下的同名文件）。</summary>
+    /// <summary>用户选定的保存路径（点「接收」并选好位置后才有意义）。</summary>
     public string SavePath => _savePath;
 
     public ReceiveConfirmDialog(IncomingRequest req)
@@ -632,37 +925,38 @@ internal sealed class ReceiveConfirmDialog : Form
 
         Text = "收到文件";
         FormBorderStyle = FormBorderStyle.FixedDialog;
-        StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(460, 300);
+        StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;
         MinimizeBox = false;
-        ShowInTaskbar = false;
+        ShowInTaskbar = true;
         TopMost = true;
         BackColor = Color.White;
         Font = new Font("微软雅黑", 9.5F);
+        // 不让 WinForms 按字体比例缩放坐标（那会把行高缩掉、文字叠在一起）；
+        // 窗口尺寸改为按内容实测尺寸算，缩放下自然对得上。
+        AutoScaleMode = AutoScaleMode.None;
+        AutoSize = false;
 
         var body = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 6,
-            Padding = new Padding(22, 18, 22, 14)
+            RowCount = 5,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Fill,
+            Padding = new Padding(24, 20, 24, 18),
+            BackColor = Color.White
         };
-        body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
-        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
-        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 22F));
-        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F));
-        body.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
+        body.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (var i = 0; i < 5; i++) body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         body.Controls.Add(new Label
         {
             Text = "收到文件",
             Font = new Font("微软雅黑", 13F, FontStyle.Bold),
             ForeColor = Color.FromArgb(28, 32, 38),
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 8)
         }, 0, 0);
 
         body.Controls.Add(new Label
@@ -670,135 +964,131 @@ internal sealed class ReceiveConfirmDialog : Form
             Text = req.FileName,
             Font = new Font("微软雅黑", 12F, FontStyle.Bold),
             ForeColor = Color.FromArgb(30, 100, 180),
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
-            AutoEllipsis = true
+            AutoSize = true,
+            MaximumSize = new Size(TextWidth, 0),   // 长文件名折行，不再被裁
+            Margin = new Padding(0, 0, 0, 4)
         }, 0, 1);
 
         body.Controls.Add(new Label
         {
             Text = $"{TransferService.FormatSize(req.Size)}   ·   来自 {req.RemoteIp}",
             ForeColor = Color.FromArgb(120, 128, 138),
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 16)
         }, 0, 2);
 
-        // 保存位置：默认收件夹，可点「选择…」另存
-        var saveRow = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2,
-            Margin = new Padding(0), Padding = new Padding(0)
-        };
-        saveRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        saveRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82F));
-        saveRow.RowStyles.Add(new RowStyle(SizeType.Absolute, 18F));
-        saveRow.RowStyles.Add(new RowStyle(SizeType.Absolute, 26F));
-
-        var saveTitle = new Label
-        {
-            Text = "保存到",
-            Font = new Font("微软雅黑", 8.5F),
-            ForeColor = Color.FromArgb(140, 148, 158),
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-        saveRow.Controls.Add(saveTitle, 0, 0);
-        saveRow.SetColumnSpan(saveTitle, 2);
-
-        _pathLabel.Text = _savePath;
-        _pathLabel.ForeColor = Color.FromArgb(60, 68, 78);
-        _pathLabel.Dock = DockStyle.Fill;
-        _pathLabel.TextAlign = ContentAlignment.MiddleLeft;
-        _pathLabel.AutoEllipsis = true;
-        saveRow.Controls.Add(_pathLabel, 0, 1);
-
-        var pickBtn = new Button
-        {
-            Text = "选择…",
-            Dock = DockStyle.Fill,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(246, 249, 253),
-            ForeColor = Color.FromArgb(40, 96, 168),
-            Cursor = Cursors.Hand,
-            Margin = new Padding(6, 0, 0, 0)
-        };
-        pickBtn.FlatAppearance.BorderColor = Color.FromArgb(206, 218, 234);
-        pickBtn.Click += (_, _) => PickPath();
-        saveRow.Controls.Add(pickBtn, 1, 1);
-        body.Controls.Add(saveRow, 0, 3);
-
-        _countdown.Text = "若 60 秒内未选择，将自动拒绝并通知对方";
+        _countdown.Text = $"点「接收」后选择保存位置；{ConfirmSeconds} 秒内未操作将自动拒绝并通知对方";
         _countdown.ForeColor = Color.FromArgb(170, 135, 40);
-        _countdown.Dock = DockStyle.Fill;
-        _countdown.TextAlign = ContentAlignment.MiddleLeft;
-        body.Controls.Add(_countdown, 0, 4);
+        _countdown.AutoSize = true;
+        _countdown.MaximumSize = new Size(TextWidth, 0);
+        _countdown.Margin = new Padding(0, 0, 0, 16);
+        body.Controls.Add(_countdown, 0, 3);
 
-        var btns = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.RightToLeft,
-            Margin = Padding.Empty,
-            Padding = Padding.Empty,
-            WrapContents = false
-        };
+        var btnFont = new Font("微软雅黑", 9.5F);
+        var acceptFont = new Font("微软雅黑", 9.5F, FontStyle.Bold);
+        var btnHeight = Math.Max(34, TextRenderer.MeasureText("接收…", acceptFont).Height + 14);
+        var acceptSize = new Size(TextRenderer.MeasureText("接收…", acceptFont).Width + 40, btnHeight);
+        var rejectSize = new Size(TextRenderer.MeasureText("拒绝", btnFont).Width + 40, btnHeight);
+
         var acceptBtn = new Button
         {
-            Text = "接收",
-            DialogResult = DialogResult.OK,
-            Size = new Size(96, 32),
+            Text = "接收…",
+            Size = acceptSize,
             BackColor = Color.FromArgb(30, 111, 217),
             ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat,
-            Font = new Font("微软雅黑", 9.5F, FontStyle.Bold),
+            Font = acceptFont,
             Cursor = Cursors.Hand,
-            Margin = new Padding(8, 4, 0, 0)
+            Margin = new Padding(8, 0, 0, 0)
         };
         acceptBtn.FlatAppearance.BorderSize = 0;
+        acceptBtn.Click += (_, _) => AcceptWithLocation();
+
         var rejectBtn = new Button
         {
             Text = "拒绝",
-            DialogResult = DialogResult.Cancel,
-            Size = new Size(88, 32),
+            Size = rejectSize,
             BackColor = Color.FromArgb(245, 246, 248),
             ForeColor = Color.FromArgb(70, 78, 88),
             FlatStyle = FlatStyle.Flat,
+            Font = btnFont,
             Cursor = Cursors.Hand,
-            Margin = new Padding(0, 4, 0, 0)
+            Margin = Padding.Empty
         };
         rejectBtn.FlatAppearance.BorderColor = Color.FromArgb(214, 220, 228);
+        rejectBtn.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
+
+        var btns = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.RightToLeft,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            Anchor = AnchorStyles.Right,
+            Margin = Padding.Empty
+        };
         btns.Controls.Add(acceptBtn);
         btns.Controls.Add(rejectBtn);
-        body.Controls.Add(btns, 0, 5);
+        body.Controls.Add(btns, 0, 4);
 
         Controls.Add(body);
         AcceptButton = acceptBtn;
         CancelButton = rejectBtn;
 
+        // 窗口尺寸 = 内容实测尺寸：文字多大，窗口就多大，不会挤在一起或右侧被裁
+        var wanted = body.PreferredSize;
+        ClientSize = new Size(Math.Max(440, wanted.Width), wanted.Height);
+
         _timer.Tick += (_, _) =>
         {
             _left--;
-            if (_left <= 0) { DialogResult = DialogResult.Cancel; Close(); return; }
-            _countdown.Text = $"若 {_left} 秒内未选择，将自动拒绝并通知对方";
+            if (_left <= 0)
+            {
+                DialogResult = DialogResult.Cancel;
+                Close();
+                return;
+            }
+            _countdown.Text = $"点「接收」后选择保存位置；{_left} 秒内未操作将自动拒绝并通知对方";
         };
         _timer.Start();
         FormClosed += (_, _) => { _timer.Stop(); _timer.Dispose(); };
     }
 
-    private void PickPath()
+    /// <summary>「接收」= 确认 + 选位置：选好路径才真正开始接收；取消选择退回确认状态（不算拒绝）。</summary>
+    private void AcceptWithLocation()
     {
-        using var dlg = new SaveFileDialog
+        _timer.Stop();  // 正在挑目录，不算超时
+        try
         {
-            Title = "选择保存位置",
-            FileName = SafeFileName(_req.FileName),
-            InitialDirectory = AppConfig.ReceiveDirectory,
-            Filter = "所有文件|*.*",
-            OverwritePrompt = true
-        };
-        if (dlg.ShowDialog(this) == DialogResult.OK)
-        {
-            _savePath = dlg.FileName;
-            _pathLabel.Text = _savePath;
+            var startDir = (!string.IsNullOrEmpty(_lastDir) && Directory.Exists(_lastDir))
+                ? _lastDir!
+                : AppConfig.ReceiveDirectory;
+
+            using var dlg = new SaveFileDialog
+            {
+                Title = "选择保存位置",
+                FileName = Path.GetFileName(_savePath),
+                InitialDirectory = startDir,
+                Filter = "所有文件|*.*",
+                OverwritePrompt = true,
+                CheckPathExists = true
+            };
+
+            if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.FileName))
+            {
+                _savePath = dlg.FileName;
+                _lastDir = Path.GetDirectoryName(_savePath);
+                DialogResult = DialogResult.OK;     // 关闭确认框，MainForm 用 SavePath 开始接收
+                return;
+            }
         }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"选择保存位置失败：{ex.Message}", "飞鸽 P2P",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        _timer.Start();     // 取消选择：继续等用户决定
     }
 
     /// <summary>把对端发来的文件名里不合法的字符替换掉，避免保存对话框直接报错。</summary>
