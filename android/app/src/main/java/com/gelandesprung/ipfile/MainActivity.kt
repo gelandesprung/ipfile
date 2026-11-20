@@ -90,6 +90,7 @@ fun AppScreen() {
     val running by AppState.serviceRunning.collectAsState()
 
     var showSettings by remember { mutableStateOf(false) }
+    var showLogs by remember { mutableStateOf(false) }
     var sheetPeer by remember { mutableStateOf<Peer?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -106,12 +107,19 @@ fun AppScreen() {
         SettingsScreen(onBack = { showSettings = false })
         return
     }
+    if (showLogs) {
+        LogsScreen(onBack = { showLogs = false })
+        return
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("飞鸽 P2P", fontWeight = FontWeight.Bold) },
                 actions = {
+                    IconButton(onClick = { showLogs = true }) {
+                        Icon(Icons.Default.Article, "日志")
+                    }
                     IconButton(onClick = { P2PEngineHolder.get(ctx).announceName(); Toast.makeText(ctx, "已刷新", Toast.LENGTH_SHORT).show() }) {
                         Icon(Icons.Default.Refresh, "刷新")
                     }
@@ -272,6 +280,30 @@ fun ProgressBar(progress: ProgressInfo?) {
         Text("${progress.fileName}  ${NetUtils.formatSize(progress.done)}/${NetUtils.formatSize(progress.total)}  ${(pct * 100).toInt()}%", fontSize = 11.sp)
         Spacer(Modifier.height(6.dp))
         LinearProgressIndicator(progress = pct, modifier = Modifier.fillMaxWidth(), color = C.Blue)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LogsScreen(onBack: () -> Unit) {
+    val logs by AppState.logs.collectAsState()
+    Scaffold(topBar = {
+        TopAppBar(title = { Text("运行日志") }, navigationIcon = {
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") }
+        })
+    }) { padding ->
+        if (logs.isEmpty()) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text("暂无日志", fontSize = 13.sp, color = C.Gray)
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+                items(logs) { line ->
+                    Text(line, fontSize = 12.sp, color = Color(0xFF333333),
+                        modifier = Modifier.padding(vertical = 4.dp))
+                }
+            }
+        }
     }
 }
 

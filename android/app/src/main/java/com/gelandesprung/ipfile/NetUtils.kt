@@ -45,9 +45,10 @@ object NetUtils {
     fun createReceiveStream(context: Context, fileName: String): Pair<OutputStream, String> {
         val base = fileName.substringAfterLast('/').substringAfterLast('\\').ifEmpty { "未命名文件" }
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // MediaStore：无需存储权限
+            // MediaStore：无需存储权限。先查出重名后生成唯一名，避免覆盖。
+            val finalName = uniqueNameMediaStore(context, base)
             val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, uniqueName(base))
+                put(MediaStore.Downloads.DISPLAY_NAME, finalName)
                 put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
                 put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/飞鸽收件")
                 put(MediaStore.Downloads.IS_PENDING, 1)
@@ -65,20 +66,42 @@ object NetUtils {
                     context.contentResolver.update(uri, v, null, null)
                 }
             }
-            finalOut to "Download/飞鸽收件/${values.get(MediaStore.Downloads.DISPLAY_NAME)}"
+            finalOut to "Download/飞鸽收件/$finalName"
         } else {
             // Android 9 及以下：公共 Download 目录
             val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "飞鸽收件")
             dir.mkdirs()
-            val file = File(dir, uniqueName(base))
+            val file = File(dir, uniqueNameFile(dir, base))
             file.outputStream() to ("Download/飞鸽收件/${file.name}")
         }
     }
 
-    private fun uniqueName(name: String): String {
-        // MediaStore 分支这里只做简单处理；真正的"不覆盖"由 DISPLAY_NAME 唯一性保证较弱，
-        // 但共享下载里系统一般会生成唯一项，满足需求。
-        return name
+    private fun splitName(name: String): Pair<String, String> {
+        val dot = name.lastIndexOf('.')
+        return if (dot > 0) name.substring(0, dot) to name.substring(dot) else name to ""
+    }
+
+    private fun uniqueNameFile(dir: File, name: String): String {
+        if (!File(dir, name).exists()) return name
+        val (stem, ext) = splitName(name)
+        var i = 1
+        while (File(dir, "$stem ($i)$ext").exists()) i++
+        return "$stem ($i)$ext"
+    }
+
+    private fun uniqueNameMediaStore(context: Context, name: String): String {
+        val cr = context.contentResolver
+        fun exists(n: String): Boolean {
+            val sel = "${MediaStore.MediaColumns.DISPLAY_NAME}=?"
+            val cur = cr.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.MediaColumns._ID), sel, arrayOf(n), null) ?: return false
+            return cur.use { it.count > 0 }
+        }
+        if (!exists(name)) return name
+        val (stem, ext) = splitName(name)
+        var i = 1
+        while (exists("$stem ($i)$ext")) i++
+        return "$stem ($i)$ext"
     }
 
     fun notifyScan(context: Context, displayName: String) {

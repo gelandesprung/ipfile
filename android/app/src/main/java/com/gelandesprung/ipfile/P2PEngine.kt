@@ -3,8 +3,8 @@ package com.gelandesprung.ipfile
 import android.content.Context
 import android.net.Uri
 import kotlinx.coroutines.*
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.io.OutputStream
 import java.net.*
 import java.nio.charset.StandardCharsets
@@ -102,22 +102,30 @@ class P2PEngine(private val appContext: Context) {
     }
 
     private fun broadcast(text: String, ip: String) {
+        val bytes = text.toByteArray(StandardCharsets.UTF_8)
+        // 与 PC 端保持一致：主用全局广播 255.255.255.255；
+        // 同时发一份网段广播，覆盖部分路由器丢弃全局广播的情况。
+        val targets = mutableSetOf("255.255.255.255")
         try {
-            val bytes = text.toByteArray(StandardCharsets.UTF_8)
-            val target = try {
-                // 优先按本机网段广播，跨网段/受限网络回退到全局广播
-                val lastDot = ip.lastIndexOf('.')
-                if (lastDot > 0) "${ip.substring(0, lastDot)}.255" else "255.255.255.255"
-            } catch (e: Exception) { "255.255.255.255" }
-            val pkt = DatagramPacket(bytes, bytes.size, InetAddress.getByName(target), UDP_PORT)
-            udp?.send(pkt)
+            val lastDot = ip.lastIndexOf('.')
+            if (lastDot > 0) targets.add("${ip.substring(0, lastDot)}.255")
         } catch (e: Exception) { }
+        for (t in targets) {
+            try {
+                val pkt = DatagramPacket(bytes, bytes.size, InetAddress.getByName(t), UDP_PORT)
+                udp?.send(pkt)
+            } catch (e: Exception) { }
+        }
     }
 
     // ---------------- TCP 接收服务 ----------------
     private fun startTcpServer() {
         try {
-            server = ServerSocket(TCP_PORT).apply { reuseAddress = true }
+            // 必须先设 reuseAddress 再 bind：用无参构造，否则端口 TIME_WAIT 时绑定失败
+            val ss = ServerSocket()
+            ss.reuseAddress = true
+            ss.bind(InetSocketAddress(TCP_PORT))
+            server = ss
         } catch (e: Exception) {
             AppState.log("TCP 端口占用：$TCP_PORT — ${e.message}")
             return
@@ -138,8 +146,8 @@ class P2PEngine(private val appContext: Context) {
         var pending = false
         try {
             client.soTimeout = 10000
-            val reader = BufferedReader(InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8))
-            val headerLine = withTimeout(10_000) { reader.readLine() }
+            val inputStream = client.getInputStream()
+            val headerLine = withTimeout(10_000) { readLineRaw(inputStream) }
             if (headerLine == null) { AppState.log("接收：未收到请求头"); return@withContext }
             val header = Protocol.parseFileRequest(headerLine)
             if (header == null) {
@@ -165,7 +173,7 @@ class P2PEngine(private val appContext: Context) {
 
             client.soTimeout = 60000
             outStream.use { out ->
-                val input = client.getInputStream()
+                val input = inputStream
                 val buf = ByteArray(BUF)
                 var received = 0L
                 while (received < header.size) {
@@ -209,8 +217,8 @@ class P2PEngine(private val appContext: Context) {
             withTimeout(10_000) { client.connect(InetSocketAddress(target.ip, target.tcpPort), 10_000) }
             writeLine(client, Protocol.buildFileRequest(displayName, size.coerceAtLeast(0)))
 
-            val reader = BufferedReader(InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8))
-            val ackLine = withTimeout(10_000) { reader.readLine() }
+            val replyStream = client.getInputStream()
+            val ackLine = withTimeout(10_000) { readLineRaw(replyStream) }
             if (ackLine == null) return@withContext false to "等待对方应答超时"
             val ack = Protocol.parseAck(ackLine)
             if (!ack.first) return@withContext false to "对方拒绝：${ack.second}"
@@ -228,7 +236,7 @@ class P2PEngine(private val appContext: Context) {
                     AppState.setProgress(ProgressInfo(TransferDirection.SEND, displayName, sent, size.coerceAtLeast(sent)))
                 }
                 out.flush()
-                val doneLine = withTimeout(10_000) { reader.readLine() }
+                val doneLine = withTimeout(10_000) { readLineRaw(replyStream) }
                 val recv = doneLine?.let { Protocol.parseDone(it) }
                 if (recv == null || recv != sent) return@withContext false to "对方确认数不符（期望 $sent，实收 $recv）"
             }
@@ -255,6 +263,19 @@ class P2PEngine(private val appContext: Context) {
             }
         }
         return uri.lastPathSegment
+    }
+
+    /** 逐字节读一行（以 \n 结尾），不使用 BufferedReader，避免预读缓冲吞掉随后的文件二进制数据。 */
+    private fun readLineRaw(input: InputStream): String? {
+        val buf = ByteArrayOutputStream()
+        while (true) {
+            val b = input.read()
+            if (b == -1) break
+            if (b == '\n'.code) break
+            if (b != '\r'.code) buf.write(b)
+            if (buf.size() > 8192) break
+        }
+        return if (buf.size() == 0) null else String(buf.toByteArray(), StandardCharsets.UTF_8)
     }
 
     private fun writeLine(socket: Socket, text: String) {

@@ -106,5 +106,27 @@ receiver.Dispose();
 sender.Dispose();
 try { Directory.Delete(tmpSend, true); } catch { }
 
+// ---------- 3. UDP 发现服务（覆盖刚修复的绑定崩溃 bug） ----------
+Console.WriteLine("\n[3] UDP 发现服务");
+using var disc = new DiscoveryService(new AppConfig { DeviceName = "发现测试机", UdpPort = 25010, TcpPort = 25011 });
+bool started;
+try { disc.Start(); started = true; } catch (Exception ex) { started = false; Console.WriteLine("    Start 抛异常：" + ex.Message); }
+Check("发现服务启动不崩溃", started);
+await Task.Delay(500);
+// 抓一个本机发出的广播包，验证格式可被协议解析
+bool captured = false;
+try {
+    using var sniffer = new System.Net.Sockets.UdpClient();
+    sniffer.Client.SetSocketOption(System.Net.Sockets.SocketOptionLevel.Socket, System.Net.Sockets.SocketOptionName.ReuseAddress, true);
+    sniffer.Client.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Any, 25010));
+    sniffer.Client.ReceiveTimeout = 3000;
+    System.Net.IPEndPoint from = new System.Net.IPEndPoint(System.Net.IPAddress.Any, 0);
+    var r = sniffer.Receive(ref from);
+    var text = Encoding.UTF8.GetString(r);
+    var p = Protocol.ParseDiscovery(text);
+    captured = p != null && p.Peer.Name == "发现测试机" && !p.Bye;
+} catch (Exception ex) { Console.WriteLine("    抓包失败：" + ex.Message); }
+Check("广播包格式可被对端解析", captured);
+
 Console.WriteLine($"\n========== 结果：{passed} 通过 / {failed} 失败 ==========");
 Environment.Exit(failed == 0 ? 0 : 1);

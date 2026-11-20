@@ -32,13 +32,22 @@ public sealed class DiscoveryService : IDisposable
 
     public void Start()
     {
-        _udp = new UdpClient(new IPEndPoint(IPAddress.Any, _config.UdpPort))
+        // 必须先设 ReuseAddress 再 Bind，否则 .NET 抛 "socket must not be bound"。
+        // 用无参构造 + Client.SetSocketOption + Bind 的顺序。
+        _udp = new UdpClient
         {
             EnableBroadcast = true,
             ExclusiveAddressUse = false
         };
         try { _udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true); }
         catch { }
+        try { _udp.Client.Bind(new IPEndPoint(IPAddress.Any, _config.UdpPort)); }
+        catch (Exception ex)
+        {
+            _udp.Close();
+            _udp = null;
+            throw new InvalidOperationException($"无法绑定 UDP 端口 {_config.UdpPort}（可能被其他程序占用）：{ex.Message}", ex);
+        }
         _ = Task.Run(ReceiveLoopAsync);
         _ = Task.Run(BroadcastLoopAsync);
         _ = Task.Run(CleanupLoopAsync);
