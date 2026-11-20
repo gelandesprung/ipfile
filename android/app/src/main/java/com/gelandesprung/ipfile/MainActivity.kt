@@ -349,6 +349,17 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Text("公共下载目录 / 飞鸽收件/", fontSize = 12.sp, color = C.Gray)
                 }
             }
+            Card(colors = CardDefaults.cardColors(containerColor = C.Card), shape = RoundedCornerShape(12.dp)) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("关于", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    val ver = try {
+                        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+                    } catch (e: Exception) { "?" }
+                    Text("飞鸽 P2P · v$ver", fontSize = 12.sp, color = C.Gray)
+                    Text("build 2026-11-20-b", fontSize = 11.sp, color = C.Gray)
+                }
+            }
         }
     }
 }
