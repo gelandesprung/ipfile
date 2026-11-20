@@ -565,6 +565,7 @@ public sealed class MainForm : Form
                 return;
             }
             _tray.Visible = false;
+            _tray.Dispose();
             _discovery.Dispose();
             _transfer.Dispose();
         };
