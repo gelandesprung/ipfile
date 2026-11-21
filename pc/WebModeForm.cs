@@ -26,6 +26,8 @@ internal sealed class WebModeForm : Form
     private readonly Button _group = new();
     private readonly ListView _list = new();
     private readonly Label _empty = new();
+    private readonly Panel _headerRow = new();
+    private readonly Panel _listDivider = new();
     private readonly Button _portBtn = new();
     private readonly ContextMenuStrip _menu = new();
     private readonly ToolStripMenuItem _menuSend = new("发送文件…");
@@ -62,12 +64,15 @@ internal sealed class WebModeForm : Form
     private void BuildUi()
     {
         Text = "网页模式 · 让朋友用浏览器收文件";
-        Size = new Size(720, 640);
-        MinimumSize = new Size(620, 540);
+        // 尺寸一律用 D() 换算成当前 DPI 的实际像素，不再对窗体做二次 Scale：
+        // 之前 Scale() 之后又有代码把控件尺寸重置成 96 DPI 的字面值，
+        // 在 150%/200% 下按钮比文字还矮，分段控件就被压扁了。
+        AutoScaleMode = AutoScaleMode.None;
+        Size = new Size(D(700), D(608));
+        MinimumSize = new Size(D(600), D(520));
         StartPosition = FormStartPosition.CenterParent;
         BackColor = Color.FromArgb(245, 246, 248);
         Font = new Font("微软雅黑", 9F);
-        AutoScaleMode = AutoScaleMode.None;
         KeyPreview = true;
 
         var root = new TableLayoutPanel
@@ -76,10 +81,10 @@ internal sealed class WebModeForm : Form
             Padding = Padding.Empty, Margin = Padding.Empty
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62F));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 250F));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, D(64)));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, D(206)));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54F));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, D(46)));
         Controls.Add(root);
 
         root.Controls.Add(BuildHeader(), 0, 0);
@@ -87,8 +92,6 @@ internal sealed class WebModeForm : Form
         root.Controls.Add(BuildGuests(), 0, 2);
         root.Controls.Add(BuildFooter(), 0, 3);
 
-        var scale = DeviceDpi / 96f;
-        if (scale > 1.01f) Scale(new SizeF(scale, scale));
         root.PerformLayout();
     }
 
@@ -107,11 +110,13 @@ internal sealed class WebModeForm : Form
         _status.Font = new Font("微软雅黑", 9F);
         _status.ForeColor = Color.FromArgb(130, 138, 148);
 
-        _toggleBtn.Text = "停止服务";
-        _toggleBtn.AutoSize = true;
+        // 停止服务是个危险操作，给描边而不是裸文字：尺寸固定，避免 AutoSize 在不同 DPI 下忽大忽小
+        _toggleBtn.AutoSize = false;
+        _toggleBtn.Size = new Size(D(84), D(26));
         _toggleBtn.FlatStyle = FlatStyle.Flat;
-        _toggleBtn.FlatAppearance.BorderSize = 0;
-        _toggleBtn.BackColor = Color.Transparent;
+        _toggleBtn.FlatAppearance.BorderSize = 1;
+        _toggleBtn.FlatAppearance.BorderColor = Color.FromArgb(222, 176, 176);
+        _toggleBtn.BackColor = Color.White;
         _toggleBtn.ForeColor = Color.FromArgb(198, 40, 40);
         _toggleBtn.Font = new Font("微软雅黑", 9F);
         _toggleBtn.Cursor = Cursors.Hand;
@@ -127,11 +132,11 @@ internal sealed class WebModeForm : Form
         host.Layout += (_, _) =>
         {
             var padX = D(22);
-            title.Location = new Point(padX, D(9));
-            _status.Location = new Point(padX, title.Bottom + D(1));
+            title.Location = new Point(padX, D(7));
+            _status.Location = new Point(padX, title.Bottom + D(3));
             _toggleBtn.Location = new Point(
                 Math.Max(padX, host.ClientSize.Width - padX - _toggleBtn.Width),
-                D(20));
+                D(19));
         };
         return host;
     }
@@ -141,76 +146,85 @@ internal sealed class WebModeForm : Form
         var wrap = new Panel
         {
             Dock = DockStyle.Fill, BackColor = Color.FromArgb(245, 246, 248),
-            Padding = new Padding(22, 12, 22, 12), Margin = Padding.Empty
+            Padding = new Padding(D(22), D(10), D(22), D(10)), Margin = Padding.Empty
         };
 
         var card = new TableLayoutPanel
         {
             Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
-            BackColor = Color.White, Margin = Padding.Empty, Padding = new Padding(16, 12, 16, 12)
+            BackColor = Color.White, Margin = Padding.Empty,
+            Padding = new Padding(D(16), D(12), D(16), D(12))
         };
-        card.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 156F));
+        card.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, D(152)));
         card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         card.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
+        // 二维码容器固定正方形（152 设计值），避免之前用 156×整列高导致上下大片留白
         _qr.Dock = DockStyle.Fill;
         _qr.SizeMode = PictureBoxSizeMode.Zoom;
         _qr.BackColor = Color.White;
         _qr.BorderStyle = BorderStyle.FixedSingle;
-        _qr.Margin = new Padding(0, 0, 14, 0);
+        _qr.Margin = new Padding(0, 0, D(18), 0);
         card.Controls.Add(_qr, 0, 0);
 
         var right = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5,
+            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4,
             Margin = Padding.Empty, Padding = Padding.Empty, BackColor = Color.White
         };
         right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));   // 地址族
-        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 26F));   // URL + 复制
-        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));   // 复制按钮
-        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 56F));   // PIN
-        right.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));   // 说明
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, D(30)));   // 地址族
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, D(34)));   // URL + 复制
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, D(52)));   // PIN
+        right.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));     // 说明
 
-        // 地址族分段控件
-        var seg = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false, Margin = Padding.Empty, Padding = Padding.Empty
-        };
-        StyleSegment(_v4, "IPv4", true);
-        StyleSegment(_v6, "IPv6", false);
+        // 地址族分段控件：用 Panel 手工定位，垂直居中；尺寸只在初始化时定一次
+        var seg = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.White };
+        InitSegment(_v4, "IPv4");
+        InitSegment(_v6, "IPv6");
         seg.Controls.Add(_v4);
         seg.Controls.Add(_v6);
+        seg.Layout += (_, _) =>
+        {
+            var y = Math.Max(0, (seg.ClientSize.Height - _v4.Height) / 2);
+            _v4.Location = new Point(0, y);
+            _v6.Location = new Point(_v4.Right + D(6), y);
+        };
         right.Controls.Add(seg, 0, 0);
 
+        // 地址与「复制」同一行：之前复制按钮掉到下一行，视觉上是断开的
         var urlRow = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1,
+            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
             Margin = Padding.Empty, Padding = Padding.Empty
         };
         urlRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        urlRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        urlRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
         _url.Dock = DockStyle.Fill;
         _url.Font = new Font("Consolas", 10F);
         _url.ForeColor = Color.FromArgb(30, 111, 217);
         _url.TextAlign = ContentAlignment.MiddleLeft;
         _url.AutoEllipsis = true;
         _url.Cursor = Cursors.Hand;
+        _url.Margin = new Padding(0, 0, D(10), 0);
         urlRow.Controls.Add(_url, 0, 0);
-        right.Controls.Add(urlRow, 0, 1);
 
-        _copy.Text = "复制链接";
-        _copy.AutoSize = true;
+        _copy.Text = "复制";
+        _copy.AutoSize = false;
+        _copy.Size = new Size(D(60), D(24));
+        _copy.Anchor = AnchorStyles.Right;
         _copy.FlatStyle = FlatStyle.Flat;
         _copy.FlatAppearance.BorderColor = Color.FromArgb(210, 217, 227);
         _copy.FlatAppearance.BorderSize = 1;
         _copy.BackColor = Color.White;
         _copy.ForeColor = Color.FromArgb(30, 111, 217);
         _copy.Font = new Font("微软雅黑", 8.5F);
-        _copy.Padding = new Padding(10, 3, 10, 3);
         _copy.Cursor = Cursors.Hand;
-        _copy.Anchor = AnchorStyles.Left;
-        right.Controls.Add(_copy, 0, 2);
+        _copy.Margin = Padding.Empty;
+        urlRow.Controls.Add(_copy, 1, 0);
+        right.Controls.Add(urlRow, 0, 1);
 
         var pinRow = new TableLayoutPanel
         {
@@ -226,26 +240,28 @@ internal sealed class WebModeForm : Form
         {
             Text = "访问 PIN", AutoSize = true, Anchor = AnchorStyles.Left,
             ForeColor = Color.FromArgb(130, 138, 148), Font = new Font("微软雅黑", 9F),
-            Margin = new Padding(0, 0, 12, 0)
+            Margin = new Padding(0, 0, D(14), 0)
         }, 0, 0);
 
         _pin.Dock = DockStyle.Fill;
         _pin.Font = new Font("Consolas", 17F, FontStyle.Bold);
         _pin.ForeColor = Color.FromArgb(28, 32, 38);
         _pin.TextAlign = ContentAlignment.MiddleLeft;
+        _pin.Margin = Padding.Empty;
         pinRow.Controls.Add(_pin, 1, 0);
 
         _pinRefresh.Text = "刷新 PIN";
         _pinRefresh.AutoSize = true;
         _pinRefresh.FlatStyle = FlatStyle.Flat;
         _pinRefresh.FlatAppearance.BorderSize = 0;
-        _pinRefresh.BackColor = Color.Transparent;
+        _pinRefresh.BackColor = Color.White;
         _pinRefresh.ForeColor = Color.FromArgb(30, 111, 217);
         _pinRefresh.Font = new Font("微软雅黑", 8.5F);
         _pinRefresh.Cursor = Cursors.Hand;
         _pinRefresh.Anchor = AnchorStyles.Right;
+        _pinRefresh.Margin = new Padding(D(8), 0, 0, 0);
         pinRow.Controls.Add(_pinRefresh, 2, 0);
-        right.Controls.Add(pinRow, 0, 3);
+        right.Controls.Add(pinRow, 0, 2);
 
         right.Controls.Add(new Label
         {
@@ -253,77 +269,109 @@ internal sealed class WebModeForm : Form
             Dock = DockStyle.Fill,
             ForeColor = Color.FromArgb(150, 156, 164),
             Font = new Font("微软雅黑", 8.5F),
-            AutoSize = false
-        }, 0, 4);
+            AutoSize = false,
+            Margin = new Padding(0, D(4), 0, 0)
+        }, 0, 3);
 
         card.Controls.Add(right, 1, 0);
         wrap.Controls.Add(card);
         return wrap;
     }
 
-    /// <summary>分段按钮只改配色，字体复用同一个实例，避免每次刷新状态都新建 GDI 字体。</summary>
-    private static readonly Font SegmentFont = new("微软雅黑", 9F);
-
-    private static void StyleSegment(Button b, string text, bool on)
+    /// <summary>分段按钮只在构建时定一次尺寸与样式（尺寸按设计值换算，之后不再重设）。</summary>
+    private void InitSegment(Button b, string text)
     {
         b.Text = text;
         b.AutoSize = false;
-        b.Size = new Size(76, 26);
+        b.Size = new Size(D(70), D(26));
         b.FlatStyle = FlatStyle.Flat;
         b.FlatAppearance.BorderSize = 1;
+        b.Font = SegmentFont;
+        b.Cursor = Cursors.Hand;
+        b.Margin = new Padding(0, 0, D(6), 0);
+    }
+
+    /// <summary>只切选中态配色，尺寸完全不动——避免刷新状态时把按钮压回 96 DPI 的尺寸。</summary>
+    private static void PaintSegment(Button b, bool on)
+    {
         b.FlatAppearance.BorderColor = on ? Color.FromArgb(30, 111, 217) : Color.FromArgb(214, 220, 228);
         b.BackColor = on ? Color.FromArgb(30, 111, 217) : Color.White;
         b.ForeColor = on ? Color.White : Color.FromArgb(110, 118, 128);
-        b.Font = SegmentFont;
-        b.Cursor = Cursors.Hand;
-        b.Margin = new Padding(0, 0, 6, 0);
     }
+
+    /// <summary>分段按钮共用同一个字体实例，避免每次刷新状态都新建 GDI 字体。</summary>
+    private static readonly Font SegmentFont = new("微软雅黑", 9F);
 
     private Control BuildGuests()
     {
         var box = new Panel
         {
             Dock = DockStyle.Fill, BackColor = Color.White,
-            Padding = new Padding(22, 8, 22, 10), Margin = new Padding(0, 0, 0, 0)
+            Padding = new Padding(D(22), D(6), D(22), D(12)), Margin = Padding.Empty
         };
 
-        var head = new Panel { Dock = DockStyle.Top, Height = 40, BackColor = Color.White };
+        var head = new Panel { Dock = DockStyle.Top, Height = D(38), BackColor = Color.White };
         _guestsTitle.Text = "在线访客";
         _guestsTitle.Font = new Font("微软雅黑", 11F, FontStyle.Bold);
         _guestsTitle.ForeColor = Color.FromArgb(40, 46, 54);
         _guestsTitle.AutoSize = true;
 
-        _group.Text = "群发";
-        _group.AutoSize = true;
+        // 群发是次要动作：描边蓝字即可。之前用实心蓝 + 大内边距，在 150% DPI 下
+        // 变成一个 44px 高的蓝方块，比页面标题还抢眼，和整页的轻量风格不搭。
+        _group.Text = "群发…";
+        _group.AutoSize = false;
+        _group.Size = new Size(D(74), D(26));
         _group.FlatStyle = FlatStyle.Flat;
-        _group.FlatAppearance.BorderSize = 0;
-        _group.BackColor = Color.FromArgb(30, 111, 217);
-        _group.ForeColor = Color.White;
+        _group.FlatAppearance.BorderSize = 1;
+        _group.FlatAppearance.BorderColor = Color.FromArgb(180, 206, 240);
+        _group.BackColor = Color.White;
+        _group.ForeColor = Color.FromArgb(30, 111, 217);
         _group.Font = new Font("微软雅黑", 9F);
-        _group.Padding = new Padding(14, 4, 14, 4);
         _group.Cursor = Cursors.Hand;
 
         head.Controls.Add(_guestsTitle);
         head.Controls.Add(_group);
         head.Layout += (_, _) =>
         {
-            _guestsTitle.Location = new Point(0, D(10));
-            _group.Location = new Point(Math.Max(0, head.ClientSize.Width - _group.Width), D(6));
+            _guestsTitle.Location = new Point(0, Math.Max(0, (head.ClientSize.Height - _guestsTitle.Height) / 2));
+            _group.Location = new Point(
+                Math.Max(0, head.ClientSize.Width - _group.Width),
+                Math.Max(0, (head.ClientSize.Height - _group.Height) / 2));
         };
+
+        // 列头自绘：ListView 自带的表头带竖分隔线，像张数据表，和卡片的轻量边界不协调
+        var headerRow = _headerRow;
+        headerRow.Dock = DockStyle.Top;
+        headerRow.Height = D(26);
+        headerRow.BackColor = Color.White;
+        Label MakeHeader(string text) => new()
+        {
+            Text = text, AutoSize = true,
+            ForeColor = Color.FromArgb(152, 158, 166),
+            Font = new Font("微软雅黑", 8.5F)
+        };
+        var hNick = MakeHeader("昵称");
+        var hIp = MakeHeader("IP 地址");
+        var hState = MakeHeader("状态");
+        headerRow.Controls.Add(hNick);
+        headerRow.Controls.Add(hIp);
+        headerRow.Controls.Add(hState);
 
         _list.View = View.Details;
         _list.FullRowSelect = true;
         _list.MultiSelect = false;
-        _list.HeaderStyle = ColumnHeaderStyle.Nonclickable;
+        _list.HeaderStyle = ColumnHeaderStyle.None;   // 用上面自绘的那一行
         _list.BorderStyle = BorderStyle.None;
         _list.Dock = DockStyle.Fill;
         _list.BackColor = Color.White;
         _list.Font = new Font("微软雅黑", 9.5F);
         _list.ShowItemToolTips = true;
         _list.ContextMenuStrip = _menu;
-        _list.Columns.Add("昵称", 140);
-        _list.Columns.Add("IP 地址", 150);
-        _list.Columns.Add("状态", 200);
+        _list.Columns.Add("昵称", D(200));
+        _list.Columns.Add("IP 地址", D(130));
+        _list.Columns.Add("状态", D(160));
+        // 行高：ListView 不会随 DPI 缩放行高，用一条 1px 宽的占位图把行撑开
+        _list.SmallImageList = new ImageList { ImageSize = new Size(1, D(28)), ColorDepth = ColorDepth.Depth32Bit };
 
         _menu.Items.AddRange(new ToolStripItem[]
         {
@@ -343,19 +391,42 @@ internal sealed class WebModeForm : Form
         _empty.BringToFront();
         listHost.ContextMenuStrip = _menu;
 
+        var divider = _listDivider;
+        divider.Dock = DockStyle.Top;
+        divider.Height = 1;
+        divider.BackColor = Color.FromArgb(236, 238, 242);
+
         box.Controls.Add(listHost);
+        box.Controls.Add(divider);
+        box.Controls.Add(headerRow);
         box.Controls.Add(head);
+
+        void PlaceHeaders()
+        {
+            if (_list.Columns.Count < 3) return;
+            // ListView 是原生控件，文字左内边距按物理像素算（约 4~5px），不随 WinForms 的 DPI 缩放
+            const int nativeTextPad = 4;
+            var firstIndent = D(3) + nativeTextPad;
+            var colIndent = D(2) + nativeTextPad;
+            var c0 = _list.Columns[0].Width;
+            var y = Math.Max(0, (headerRow.ClientSize.Height - hNick.Height) / 2);
+            hNick.Location = new Point(firstIndent, y);
+            hIp.Location = new Point(c0 + colIndent, y);
+            hState.Location = new Point(c0 + _list.Columns[1].Width + colIndent, y);
+        }
 
         void FitColumns()
         {
-            var w = Math.Max(_list.ClientSize.Width - 4, 240);
-            var ipW = D(150);
-            var stateW = D(200);
+            var w = Math.Max(_list.ClientSize.Width - 2, D(260));
+            var nickW = (int)(w * 0.40);
+            var ipW = (int)(w * 0.26);
+            _list.Columns[0].Width = nickW;
             _list.Columns[1].Width = ipW;
-            _list.Columns[2].Width = Math.Max(D(120), Math.Min(stateW, w - D(140) - ipW));
-            _list.Columns[0].Width = Math.Max(D(90), w - _list.Columns[1].Width - _list.Columns[2].Width);
+            _list.Columns[2].Width = Math.Max(D(110), w - nickW - ipW);
+            PlaceHeaders();
         }
         _list.SizeChanged += (_, _) => FitColumns();
+        headerRow.SizeChanged += (_, _) => PlaceHeaders();
         FitColumns();
 
         return box;
@@ -366,32 +437,41 @@ internal sealed class WebModeForm : Form
         var host = new Panel
         {
             Dock = DockStyle.Fill, BackColor = Color.White,
-            Padding = new Padding(22, 8, 22, 8), Margin = Padding.Empty
+            Padding = new Padding(D(22), D(8), D(22), D(8)), Margin = Padding.Empty
         };
 
         var hint = new Label
         {
-            Text = "关掉这个窗口服务仍在运行 · 收文件时会弹确认框，与手机互传用的是同一套确认与落盘逻辑",
+            Text = "窗口可关闭，服务继续运行 · 收文件时会弹确认框，与手机互传用同一套落盘逻辑",
             Dock = DockStyle.Fill,
             ForeColor = Color.FromArgb(150, 156, 164),
             Font = new Font("微软雅黑", 8.5F),
             TextAlign = ContentAlignment.MiddleLeft,
-            AutoEllipsis = true
+            AutoEllipsis = true,
+            Padding = new Padding(0, 0, D(76), 0)
         };
 
         _portBtn.Text = "改端口";
-        _portBtn.AutoSize = true;
+        _portBtn.AutoSize = false;
+        _portBtn.Size = new Size(D(58), D(24));
         _portBtn.FlatStyle = FlatStyle.Flat;
         _portBtn.FlatAppearance.BorderSize = 0;
-        _portBtn.BackColor = Color.Transparent;
+        _portBtn.BackColor = Color.White;
         _portBtn.ForeColor = Color.FromArgb(120, 128, 138);
         _portBtn.Font = new Font("微软雅黑", 8.5F);
         _portBtn.Cursor = Cursors.Hand;
-        _portBtn.Dock = DockStyle.Right;
 
         host.Controls.Add(hint);
         host.Controls.Add(_portBtn);
         host.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 1, BackColor = Color.FromArgb(224, 228, 233) });
+        _portBtn.BringToFront();   // 压在 Fill 的提示文字上面，避免被盖住
+
+        host.Layout += (_, _) =>
+        {
+            _portBtn.Location = new Point(
+                Math.Max(0, host.ClientSize.Width - D(22) - _portBtn.Width),
+                Math.Max(0, (host.ClientSize.Height - _portBtn.Height) / 2));
+        };
         return host;
     }
 
@@ -443,6 +523,16 @@ internal sealed class WebModeForm : Form
         Close();
     }
 
+    /// <summary>
+    /// 句柄创建后 WinForms 会把 ListView 重新置为可见（主窗口也踩过同样的坑），
+    /// 这里按真实访客数再校正一次「列表 / 空状态 / 列头」的显示。
+    /// </summary>
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        RefreshGuests();
+    }
+
     // ---------------- 状态与地址 ----------------
 
     private void UpdateStatus()
@@ -458,7 +548,7 @@ internal sealed class WebModeForm : Form
         _pin.Enabled = running;
         _pinRefresh.Enabled = running;
         _copy.Enabled = running;
-        _group.Enabled = running;
+        _group.Enabled = running && _web.SnapshotGuests().Count > 0;
 
         var v6 = AppConfig.GetLocalIpV6Only();
         var v4 = AppConfig.GetLocalIpV4Only();
@@ -469,8 +559,8 @@ internal sealed class WebModeForm : Form
         if (_family == "v6" && v6 == null) _family = v4 != null ? "v4" : "v6";
         if (_family == "v4" && v4 == null) _family = "v6";
 
-        StyleSegment(_v4, "IPv4", _family == "v4");
-        StyleSegment(_v6, "IPv6", _family == "v6");
+        PaintSegment(_v4, _family == "v4");
+        PaintSegment(_v6, _family == "v6");
 
         var url = CurrentUrl();
         _url.Text = url.Length > 0 ? url : "（本机没有可用地址）";
@@ -617,6 +707,10 @@ internal sealed class WebModeForm : Form
         _guestsTitle.Text = guests.Count > 0 ? $"在线访客 {guests.Count}" : "在线访客";
         _empty.Visible = _list.Items.Count == 0;
         _list.Visible = !_empty.Visible;
+        // 没有人时连列头一起收起来：留一行孤零零的「昵称 / IP / 状态」下面是空状态，很割裂
+        _headerRow.Visible = !_empty.Visible;
+        _listDivider.Visible = !_empty.Visible;
+        _group.Enabled = _web.Running && guests.Count > 0;
     }
 
     private async Task SendToSelectedAsync()
