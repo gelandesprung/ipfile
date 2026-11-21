@@ -153,16 +153,39 @@ public sealed class WebHostService : IDisposable
 
     // ---------------- 生命周期 ----------------
 
-    public (bool Ok, string Message) Start(int preferredPort)
+    /// <summary>随机端口的取值区间：避开 1024 以下的系统端口，也避开 8080/3000 这类各方抢占的热门端口。</summary>
+    public const int RandomPortMin = 20000;
+    public const int RandomPortMax = 61000;
+
+    /// <summary>
+    /// 随机挑一个端口（只挑数值，能不能用由 Start 试绑决定）。
+    /// 用 <see cref="RandomNumberGenerator"/> 而不是 Random：两个进程同一毫秒启动也不会挑到同一个起点。
+    /// </summary>
+    public static int RandomPort()
+    {
+        Span<byte> buf = stackalloc byte[4];
+        RandomNumberGenerator.Fill(buf);
+        var v = BitConverter.ToUInt32(buf);
+        return RandomPortMin + (int)(v % (uint)(RandomPortMax - RandomPortMin + 1));
+    }
+
+    /// <summary>
+    /// 启动服务。<paramref name="preferredPort"/> 传 0（默认）表示每次启动都随机换一个端口，
+    /// 不记忆上次用过的——固定端口容易被别的程序占，也容易被猜到。
+    /// 端口被占用时：随机模式会再抽几个随机端口，最后顺延兜底；指定端口则只往后顺延。
+    /// </summary>
+    public (bool Ok, string Message) Start(int preferredPort = 0)
     {
         if (Running) return (true, $"网页服务已在运行 · 端口 {Port}");
 
-        var start = Math.Clamp(preferredPort, 1024, 65535);
+        var random = preferredPort <= 0;
+        var start = random ? RandomPort() : Math.Clamp(preferredPort, 1024, 65535);
         TcpListener? listener = null;
         var used = start;
         string lastError = "";
-        for (var p = start; p < Math.Min(start + 12, 65536); p++)
+        foreach (var p in PortCandidates(start, random))
         {
+            if (p < 1024 || p > 65535) continue;
             if (TryBind(p, out var l, out var err))
             {
                 listener = l;
@@ -173,7 +196,9 @@ public sealed class WebHostService : IDisposable
         }
 
         if (listener == null)
-            return (false, $"端口 {start}–{start + 11} 都不可用：{lastError}");
+            return (false, random
+                ? $"随机端口都没绑上（最后一个 {used}）：{lastError}"
+                : $"端口 {start}–{start + 11} 都不可用：{lastError}");
 
         _listener = listener;
         _cts = new CancellationTokenSource();
@@ -191,6 +216,27 @@ public sealed class WebHostService : IDisposable
         return (true, used == start
             ? $"网页服务已启动 · 端口 {used}（局域网内浏览器可访问）"
             : $"端口 {start} 被占用，已改用 {used}");
+    }
+
+    /// <summary>候选端口序列：随机模式先抽 5 个随机端口，再顺延 8 个兜底。</summary>
+    private static IEnumerable<int> PortCandidates(int start, bool random)
+    {
+        var seen = new HashSet<int> { start };
+        yield return start;
+
+        if (!random)
+        {
+            for (var i = 1; i < 12; i++) yield return start + i;
+            yield break;
+        }
+
+        for (var i = 0; i < 4; i++)
+        {
+            var p = RandomPort();
+            if (seen.Add(p)) yield return p;
+        }
+        for (var i = 1; i <= 8; i++)
+            if (seen.Add(start + i)) yield return start + i;
     }
 
     private static bool TryBind(int port, out TcpListener? listener, out string error)

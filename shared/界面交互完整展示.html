@@ -330,7 +330,7 @@
                 <div style="display:flex;gap:12px;align-items:center">
                   <div class="qr" id="hostQr"></div>
                   <div style="flex:1;min-width:0">
-                    <div class="addr" id="hostAddr">http://192.168.1.7:8080</div>
+                    <div class="addr" id="hostAddr">http://192.168.1.7:20481</div>
                     <div class="muted" style="margin-top:10px">访问 PIN</div>
                     <div class="pin">482913</div>
                     <div style="font-size:12px;color:var(--blue);margin-top:4px">刷新 PIN</div>
@@ -370,7 +370,7 @@
               <div class="pc-col">
                 <div class="segment"><span class="on">IPv4</span><span class="off">IPv6</span></div>
                 <div class="qr" style="margin:0 0 10px 0"></div>
-                <div class="addr">http://192.168.1.7:8080</div>
+                <div class="addr">http://192.168.1.7:20481</div>
                 <div class="muted" style="margin-top:8px">PIN <b style="font-size:16px;color:var(--ink);letter-spacing:1px">482913</b></div>
               </div>
               <div class="pc-col">
@@ -442,7 +442,7 @@
         <div class="browser">
           <div class="browser-bar">
             <span class="browser-dots"><span></span><span></span><span></span></span>
-            <span class="url">http://192.168.1.7:8080</span>
+            <span class="url">http://192.168.1.7:20481</span>
           </div>
 
           <!-- 状态① 加入 -->
@@ -527,7 +527,7 @@
             <div><i style="background:var(--blue)"></i>3 访客不改名字：加入时填一次，之后只读</div>
             <div><i style="background:var(--green)"></i>4 需要群发入口：多选访客逐人发送</div>
             <div><i style="background:var(--blue)"></i>5 仅浅色，不做深色切换</div>
-            <div><i style="background:var(--blue)"></i>6 默认端口 8080，占用时提示改</div>
+            <div><i style="background:var(--blue)"></i>6 端口每次启动随机（20000–61000），可点「换端口」重随机</div>
             <div><i style="background:var(--blue)"></i>7 网页面默认 IPv4，配对码维持 IPv6 优先</div>
             <div><i style="background:var(--blue)"></i>8 地址族切换不联动已连接访客</div>
             <div><i style="background:var(--blue)"></i>9 配对码不加地址族切换（保护已测流程）</div>
@@ -561,8 +561,8 @@
   document.querySelectorAll('.qr').forEach((q,idx)=>paintQr(q,idx+1));
 
   // ---- Host 地址族切换 ----
-  const addrV4='http://192.168.1.7:8080';
-  const addrV6='http://[2409:8a55::5]:8080';
+  const addrV4='http://192.168.1.7:20481';
+  const addrV6='http://[2409:8a55::5]:20481';
   document.querySelectorAll('#hostSeg span').forEach(sp=>{
     sp.addEventListener('click',()=>{
       document.querySelectorAll('#hostSeg span').forEach(s=>{s.classList.remove('on');s.classList.add('off')});

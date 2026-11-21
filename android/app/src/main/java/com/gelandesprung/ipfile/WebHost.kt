@@ -44,7 +44,10 @@ import java.util.concurrent.ConcurrentHashMap
 class WebHost(private val appContext: Context) {
 
     companion object {
-        const val DEFAULT_PORT = 8080
+        /** 随机端口区间：避开系统端口，也避开 8080/3000 这类被各方抢占的热门端口。 */
+        const val PORT_MIN = 20000
+        const val PORT_MAX = 61000
+        private val SECURE_RANDOM = SecureRandom()
         private const val BUF = 64 * 1024
         private const val OFFER_TTL_MS = 60_000L
         private const val UPLOAD_CONFIRM_TIMEOUT_MS = 60_000L
@@ -152,15 +155,21 @@ class WebHost(private val appContext: Context) {
 
     // ---------------- 生命周期 ----------------
 
-    /** 启动服务；端口被占用时从 [preferredPort] 往后顺延最多 12 个。 */
-    fun start(preferredPort: Int = DEFAULT_PORT): Pair<Boolean, String> {
+    /**
+     * 启动服务。[preferredPort] 传 0（默认）表示每次启动都随机换一个端口，不记忆上次用过的——
+     * 固定端口容易被别的程序占，也容易被猜到。端口被占用时：随机模式会再抽几个随机端口，
+     * 最后顺延兜底；指定端口则只往后顺延。
+     */
+    fun start(preferredPort: Int = 0): Pair<Boolean, String> {
         if (running) return true to "网页服务已在运行 · 端口 $port"
 
-        val start = preferredPort.coerceIn(1024, 65535)
+        val random = preferredPort <= 0
+        val start = if (random) randomPort() else preferredPort.coerceIn(1024, 65535)
         var socket: ServerSocket? = null
         var used = start
         var lastError = ""
-        for (p in start until minOf(start + 12, 65536)) {
+        for (p in portCandidates(start, random)) {
+            if (p < 1024 || p > 65535) continue
             try {
                 socket = openSocket(p)
                 used = p
@@ -169,7 +178,11 @@ class WebHost(private val appContext: Context) {
                 lastError = e.message ?: e.javaClass.simpleName
             }
         }
-        if (socket == null) return false to "端口 $start–${start + 11} 都不可用：$lastError"
+        if (socket == null) return false to if (random) {
+            "随机端口都没绑上（最后一个 $used）：$lastError"
+        } else {
+            "端口 $start–${start + 11} 都不可用：$lastError"
+        }
 
         server = socket
         port = used
@@ -187,7 +200,27 @@ class WebHost(private val appContext: Context) {
         scope.launch { sweepLoop() }
 
         log("网页服务已启动 · 端口 $used（局域网内浏览器可访问）")
-        return true to if (used == start) "网页服务已启动 · 端口 $used" else "端口 $start 被占用，已改用 $used"
+        return true to when {
+            used == start -> "网页服务已启动 · 端口 $used"
+            random -> "随机端口 $start 被占用，已改用 $used"
+            else -> "端口 $start 被占用，已改用 $used"
+        }
+    }
+
+    /** 随机挑一个端口（只挑数值，能不能用由 [start] 试绑决定）。 */
+    private fun randomPort(): Int = PORT_MIN + SECURE_RANDOM.nextInt(PORT_MAX - PORT_MIN + 1)
+
+    /** 候选端口序列：随机模式先抽 5 个随机端口，再顺延 8 个兜底。 */
+    private fun portCandidates(start: Int, random: Boolean): List<Int> {
+        val seen = LinkedHashSet<Int>()
+        seen.add(start)
+        if (!random) {
+            for (i in 1 until 12) seen.add(start + i)
+            return seen.toList()
+        }
+        repeat(4) { seen.add(randomPort()) }
+        for (i in 1..8) seen.add(start + i)
+        return seen.toList()
     }
 
     /**

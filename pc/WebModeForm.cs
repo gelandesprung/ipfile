@@ -10,7 +10,6 @@ namespace FeigeP2P;
 internal sealed class WebModeForm : Form
 {
     private readonly WebHostService _web;
-    private readonly AppConfig _config;
     private readonly Action _onStateChanged;
 
     private readonly Label _status = new();
@@ -40,10 +39,9 @@ internal sealed class WebModeForm : Form
     private string _family = "v4";
     private bool _allowClose;
 
-    public WebModeForm(WebHostService web, AppConfig config, Action onStateChanged)
+    public WebModeForm(WebHostService web, Action onStateChanged)
     {
         _web = web;
-        _config = config;
         _onStateChanged = onStateChanged;
 
         BuildUi();
@@ -208,8 +206,8 @@ internal sealed class WebModeForm : Form
         _url.Font = new Font("Consolas", 9.5F);
         _url.ForeColor = Color.FromArgb(30, 111, 217);
         _url.TextAlign = ContentAlignment.MiddleLeft;
-        // IPv6 的 URL 有 50 多个字符，单行放不下。让 Label 自己折行会把 ":18080/" 劈成
-        // ":180" + "80/"，所以下面按 "]" 手动断点，端口整体落到第二行。
+        // IPv6 的 URL 有 50 多个字符，单行放不下。让 Label 自己折行会把 ":20481/" 劈成
+        // ":204" + "81/"（端口是 5 位随机数），所以下面按 "]" 手动断点，端口整体落到第二行。
         _url.AutoEllipsis = false;
         _url.Cursor = Cursors.Hand;
         _url.Margin = new Padding(0, 0, D(10), 0);
@@ -455,7 +453,7 @@ internal sealed class WebModeForm : Form
             Padding = new Padding(0, 0, D(76), 0)
         };
 
-        _portBtn.Text = "改端口";
+        _portBtn.Text = "换端口";
         _portBtn.AutoSize = false;
         _portBtn.Size = new Size(D(58), D(24));
         _portBtn.FlatStyle = FlatStyle.Flat;
@@ -464,6 +462,7 @@ internal sealed class WebModeForm : Form
         _portBtn.ForeColor = Color.FromArgb(120, 128, 138);
         _portBtn.Font = new Font("微软雅黑", 8.5F);
         _portBtn.Cursor = Cursors.Hand;
+        _tip.SetToolTip(_portBtn, "随机换一个端口并重启服务（现有访客会断开）");
 
         host.Controls.Add(hint);
         host.Controls.Add(_portBtn);
@@ -491,7 +490,7 @@ internal sealed class WebModeForm : Form
             _web.RefreshPin();
             _pin.Text = _web.Pin;
         };
-        _portBtn.Click += (_, _) => ChangePort();
+        _portBtn.Click += (_, _) => RollPort();
         _group.Click += (_, _) => GroupSendAsync().FireAndForget();
         _menuSend.Click += (_, _) => SendToSelectedAsync().FireAndForget();
         _menuCopyIp.Click += (_, _) =>
@@ -650,47 +649,40 @@ internal sealed class WebModeForm : Form
         }
         else
         {
-            var (ok, msg) = _web.Start(_config.WebPort);
+            // 端口不落配置：每次启动都由服务随机抽一个可用的
+            var (ok, msg) = _web.Start();
             if (!ok)
             {
                 MessageBox.Show(this, msg, "网页模式", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
-            _config.WebPort = _web.Port;
-            _config.Save();
         }
         UpdateStatus();
         RefreshGuests();
     }
 
-    private void ChangePort()
+    /// <summary>
+    /// 换一个随机端口并重启服务。端口不再让 Host 手输：随机本来就是用来避开占用的，
+    /// 换一次比让用户自己猜一个没被占的端口省事。重启会断开现有访客，所以先确认。
+    /// </summary>
+    private void RollPort()
     {
-        using var dlg = new InputDialog("修改端口", "网页模式端口（建议 8080–9000，改完会重启服务）：", _config.WebPort.ToString())
-        { Owner = this };
-        if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        if (!int.TryParse(dlg.Value.Trim(), out var port) || port < 1024 || port > 65535)
+        if (!_web.Running)
         {
-            MessageBox.Show(this, "端口需为 1024–65535 之间的数字", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, "服务没在运行，启动时会自动随机挑一个端口。", "网页模式",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        var wasRunning = _web.Running;
-        if (wasRunning) _web.Stop();
-        _config.WebPort = port;
-        _config.Save();
-        if (wasRunning)
-        {
-            var (ok, msg) = _web.Start(port);
-            if (!ok)
-            {
-                MessageBox.Show(this, msg, "网页模式", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-            else if (_web.Port != port)
-            {
-                _config.WebPort = _web.Port;
-                _config.Save();
-            }
-        }
+        var guests = _web.SnapshotGuests().Count;
+        if (guests > 0 && MessageBox.Show(this,
+                $"换端口会重启服务，当前 {guests} 位访客需要重新扫码或打开新地址才能继续。\n\n继续换端口？",
+                "换端口", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            return;
+
+        _web.Stop();
+        var (ok, msg) = _web.Start();
+        if (!ok) MessageBox.Show(this, msg, "网页模式", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         UpdateStatus();
         RefreshGuests();
     }

@@ -101,8 +101,8 @@ public sealed class AppConfig
     public int UdpPort { get; set; } = 2425;
     public int TcpPort { get; set; } = 2425;
 
-    /// <summary>网页模式端口（浏览器访客访问）。默认 8080，被占用时服务会自动往后找可用端口。</summary>
-    public int WebPort { get; set; } = 8080;
+    // 网页模式端口不进配置：每次启动服务都由 WebHostService 随机抽一个可用端口，
+    // 固定端口容易被别的程序占用，也容易被同一网络里的人猜到。
 
     /// <summary>最近传输的文件（最多 5 条，最新在前），关掉程序再打开还在。</summary>
     public List<RecentItem> Recent { get; set; } = new();

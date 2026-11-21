@@ -305,7 +305,7 @@ try { Directory.Delete(tmpSend, true); } catch { }
 Console.WriteLine("\n[6] 网页模式：加入 / 下行发送 / 上行接收");
 
 const int WebPort = 25160;
-var webCfg = new AppConfig { DeviceName = "网页测试机", TcpPort = 25162, WebPort = WebPort };
+var webCfg = new AppConfig { DeviceName = "网页测试机", TcpPort = 25162 };
 using var web = new WebHostService(webCfg);
 
 var webDir = Path.Combine(Path.GetTempPath(), "feige_web_" + Guid.NewGuid().ToString("N")[..8]);
@@ -446,6 +446,27 @@ Check("成功加入后失败计数已重置（再错 2 次不换码）", web.Pin
 
 web.Stop();
 Check("停止服务后访客全部清空", web.SnapshotGuests().Count == 0);
+
+// ---------- 端口策略：不再固定 8080，每次启动随机 ----------
+var randomPorts = Enumerable.Range(0, 8).Select(_ => WebHostService.RandomPort()).ToList();
+Check("随机端口落在 20000–61000",
+    randomPorts.All(p => p >= WebHostService.RandomPortMin && p <= WebHostService.RandomPortMax),
+    string.Join(",", randomPorts));
+Check("随机端口不会退化成固定值", randomPorts.Distinct().Count() >= 7, string.Join(",", randomPorts));
+
+var autoStart = web.Start();
+Check("默认启动（不传端口）即随机端口",
+    autoStart.Ok && web.Port >= WebHostService.RandomPortMin && web.Port <= WebHostService.RandomPortMax,
+    autoStart.Message);
+var autoPage = await http.GetStringAsync($"http://127.0.0.1:{web.Port}/");
+Check("随机端口上的访客页可正常打开", autoPage.Contains("加入飞鸽"), $"{autoPage.Length} 字节");
+
+var firstPort = web.Port;
+web.Stop();
+web.Start();
+Check("重启服务会换一个新端口", web.Port != firstPort, $"{firstPort} -> {web.Port}");
+web.Stop();
+
 try { Directory.Delete(webDir, true); } catch { }
 
 Console.WriteLine($"\n========== 结果：{passed} 通过 / {failed} 失败 ==========");

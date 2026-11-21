@@ -1223,7 +1223,7 @@ public sealed class MainForm : Form
 
         if (_webForm == null || _webForm.IsDisposed)
         {
-            _webForm = new WebModeForm(_web!, _config, UpdateWebEntry);
+            _webForm = new WebModeForm(_web!, UpdateWebEntry);
             _webForm.FormClosed += (_, _) =>
             {
                 _webForm = null;
@@ -1280,21 +1280,17 @@ public sealed class MainForm : Form
         if (_web == null) return false;
         if (_web.Running) return true;
 
-        var (ok, msg) = _web.Start(_config.WebPort);
+        // 端口不落配置：每次启动随机抽一个可用的（见 WebHostService.RandomPort）
+        var (ok, msg) = _web.Start();
         if (!ok)
         {
             AppendLog($"网页模式启动失败：{msg}", Color.FromArgb(190, 40, 40));
             MessageBox.Show(this,
-                $"{msg}\n\n可以在网页模式窗口里点「改端口」换一个，或先关掉占用该端口的程序。",
+                $"{msg}\n\n可以在网页模式窗口里点「换端口」再随机一个，或先关掉占用该端口的程序。",
                 "网页模式", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return false;
         }
 
-        if (_web.Port != _config.WebPort)
-        {
-            _config.WebPort = _web.Port;
-            _config.Save();
-        }
         AppendLog(msg, Color.FromArgb(25, 140, 60));
         AppendLog("朋友连同一 WiFi / 热点，用浏览器打开该地址，输入 PIN 加入即可收发文件", Color.Gray);
         AppendLog("若朋友打不开页面，请确认 Windows 防火墙已允许本程序访问「专用网络」", Color.Gray);
