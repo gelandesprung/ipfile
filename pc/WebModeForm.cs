@@ -176,7 +176,7 @@ internal sealed class WebModeForm : Form
         };
         right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, D(30)));   // 地址族
-        right.RowStyles.Add(new RowStyle(SizeType.Absolute, D(34)));   // URL + 复制
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, D(46)));   // URL + 复制（IPv6 地址长，允许换两行）
         right.RowStyles.Add(new RowStyle(SizeType.Absolute, D(52)));   // PIN
         right.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));     // 说明
 
@@ -205,10 +205,12 @@ internal sealed class WebModeForm : Form
         urlRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
         _url.Dock = DockStyle.Fill;
-        _url.Font = new Font("Consolas", 10F);
+        _url.Font = new Font("Consolas", 9.5F);
         _url.ForeColor = Color.FromArgb(30, 111, 217);
         _url.TextAlign = ContentAlignment.MiddleLeft;
-        _url.AutoEllipsis = true;
+        // IPv6 的 URL 有 50 多个字符，单行放不下。让 Label 自己折行会把 ":18080/" 劈成
+        // ":180" + "80/"，所以下面按 "]" 手动断点，端口整体落到第二行。
+        _url.AutoEllipsis = false;
         _url.Cursor = Cursors.Hand;
         _url.Margin = new Padding(0, 0, D(10), 0);
         urlRow.Controls.Add(_url, 0, 0);
@@ -581,13 +583,24 @@ internal sealed class WebModeForm : Form
         PaintSegment(_v6, _family == "v6");
 
         var url = CurrentUrl();
-        _url.Text = url.Length > 0 ? url : "（本机没有可用地址）";
+        _url.Text = FormatUrlForDisplay(url);
         _url.ForeColor = url.Length > 0 ? Color.FromArgb(30, 111, 217) : Color.FromArgb(150, 156, 164);
         var tip = url.Length > 0 ? url : "请检查网络连接";
         _url.Tag = url;
         _tip.SetToolTip(_url, tip);
         RenderQr(url);
         _onStateChanged();
+    }
+
+    /// <summary>
+    /// 只影响显示：IPv6 的 URL 太长，在 <c>]</c> 之后插一个换行，让 <c>:端口/</c> 整体落到第二行，
+    /// 避免 Label 自动折行把端口劈开。复制用的仍是 <c>_url.Tag</c> 里的完整 URL。
+    /// </summary>
+    private static string FormatUrlForDisplay(string url)
+    {
+        if (url.Length == 0) return "（本机没有可用地址）";
+        var cut = url.IndexOf("]:", StringComparison.Ordinal);
+        return cut > 0 ? url[..(cut + 1)] + "\r\n" + url[(cut + 1)..] : url;
     }
 
     private string CurrentUrl()

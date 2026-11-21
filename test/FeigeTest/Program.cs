@@ -53,6 +53,36 @@ void Check(string name, bool ok, string detail = "")
     else { Console.WriteLine($"  FAIL  {name} {detail}"); failed++; }
 }
 
+// ---------- IPv6 取址策略 ----------
+// 同一块网卡上通常有三类地址：SLAAC 的 /64（稳定）、隐私临时地址（会轮换）、
+// DHCPv6 下发的 /128。网页模式要把地址给别人的浏览器用，必须挑 /64 那个。
+{
+    var v6All = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()
+        .Where(n => n.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up &&
+                    n.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback &&
+                    n.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Tunnel)
+        .SelectMany(n => n.GetIPProperties().UnicastAddresses)
+        .Where(u => u.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+        .Where(u => !u.Address.IsIPv6LinkLocal && !u.Address.IsIPv6SiteLocal &&
+                    !u.Address.IsIPv6Multicast && !u.Address.IsIPv6Teredo)
+        .ToList();
+
+    var chosenV6 = AppConfig.GetLocalIpV6Only();
+    if (chosenV6 == null)
+    {
+        Console.WriteLine("  SKIP  IPv6 取址策略（本机没有可用的全局 IPv6）");
+    }
+    else
+    {
+        var pick = v6All.FirstOrDefault(u => u.Address.ToString() == chosenV6);
+        Check("IPv6 不选隐私临时地址", pick == null || !pick.IsTransient, chosenV6);
+        if (v6All.Any(u => u.PrefixLength == 64))
+            Check("有 /64 地址时优先选 /64（同链路直连）",
+                pick != null && pick.PrefixLength == 64,
+                $"{chosenV6} prefixlen={pick?.PrefixLength}");
+    }
+}
+
 Console.WriteLine("========== 飞鸽 P2P v2.0 协议与配对测试 ==========\n");
 
 // ---------- 1. 二维码 / 配对编解码 ----------

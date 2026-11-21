@@ -188,7 +188,24 @@ public sealed class AppConfig
                         if (!isUla && !isGlobal) continue;
 
                         var score = isGlobal ? 100 : 50;
-                        if (!ua.IsTransient) score += 20;             // 稳定的全局地址优先于隐私临时地址
+
+                        // 临时地址（RFC 4941 隐私扩展）会定期轮换，别拿它当别人要访问的入口
+                        if (ua.IsTransient) score -= 30;
+
+                        // /64 是路由器通告下发的前缀宽度：同链路的设备靠它直接把目标判为 on-link、
+                        // 走邻居发现直连。DHCPv6 单独下发的 /128 地址同样能连，但兼容性不如 /64，
+                        // 所以只给 /64 加分、不给 /128 扣分——只有 DHCPv6 的网络里它仍是唯一选择。
+                        if (ua.PrefixLength == 64) score += 30;
+
+                        // 接口标识越稳定越好：LinkLayerAddress（EUI-64 / 稳定隐私地址）> Dhcp > Random
+                        var suffix = ua.SuffixOrigin;
+                        score += suffix switch
+                        {
+                            SuffixOrigin.LinkLayerAddress => 10,
+                            SuffixOrigin.Random => -10,
+                            _ => 0
+                        };
+
                         v6.Add((score, a.ToString()));
                     }
                     else if (a.AddressFamily == AddressFamily.InterNetwork)
