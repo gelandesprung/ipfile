@@ -35,6 +35,13 @@ android {
     buildFeatures {
         compose = true
     }
+
+    sourceSets {
+        getByName("main") {
+            // 浏览器访客页与 PC 端共用仓库里的这一份（PC 走嵌入资源，这里走 assets）
+            assets.srcDir("../../shared/web")
+        }
+    }
 }
 
 dependencies {

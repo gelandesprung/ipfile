@@ -18,9 +18,11 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
-/** 前台服务：承载 P2PEngine，保证退到后台/锁屏仍能接收文件。 */
+/** 前台服务：承载 P2PEngine 与网页模式，保证退到后台/锁屏仍能收发文件。 */
 class ReceiveService : Service() {
     private var engine: P2PEngine? = null
+    /** 网页模式服务：在这里持一份强引用，Activity 销毁后仍由前台服务托着。 */
+    private var web: WebHost? = null
     private var job: Job? = null
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -30,14 +32,18 @@ class ReceiveService : Service() {
         const val NOTI_ID = 1001
         const val ALERT_NOTI_ID = 1002
         const val PAIR_NOTI_ID = 1003
+        const val WEB_NOTI_ID = 1004
         const val ACTION_START = "start"
         const val ACTION_STOP = "stop"
         const val ACTION_ACCEPT = "accept"
         const val ACTION_REJECT = "reject"
         const val ACTION_PAIR_ACCEPT = "pair_accept"
         const val ACTION_PAIR_REJECT = "pair_reject"
+        const val ACTION_WEB_ACCEPT = "web_accept"
+        const val ACTION_WEB_REJECT = "web_reject"
         const val EXTRA_REQUEST_ID = "request_id"
         const val EXTRA_PAIR_ID = "pair_id"
+        const val EXTRA_UPLOAD_ID = "upload_id"
 
         fun start(context: Context) {
             val i = Intent(context, ReceiveService::class.java).apply { action = ACTION_START }
@@ -50,6 +56,8 @@ class ReceiveService : Service() {
         super.onCreate()
         createChannel()
         startForeground(NOTI_ID, buildNotification("接收服务已启动"))
+        // 这里只是持有实例；监听端口要等用户点「网页模式」才发生
+        web = WebHostHolder.get(applicationContext)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -72,6 +80,13 @@ class ReceiveService : Service() {
                 getSystemService(NotificationManager::class.java)?.cancel(PAIR_NOTI_ID)
                 return START_NOT_STICKY
             }
+            ACTION_WEB_ACCEPT, ACTION_WEB_REJECT -> {
+                val id = intent.getStringExtra(EXTRA_UPLOAD_ID) ?: ""
+                (web ?: WebHostHolder.get(applicationContext))
+                    .respondUpload(id, intent.action == ACTION_WEB_ACCEPT)
+                getSystemService(NotificationManager::class.java)?.cancel(WEB_NOTI_ID)
+                return START_NOT_STICKY
+            }
             else -> {
                 if (engine == null) {
                     engine = P2PEngineHolder.get(applicationContext).also { it.start() }
@@ -79,6 +94,7 @@ class ReceiveService : Service() {
                     observeProgress()
                     observePending()
                     observePendingPair()
+                    observePendingUpload()
                 }
             }
         }
@@ -125,6 +141,21 @@ class ReceiveService : Service() {
                         nm.cancel(PAIR_NOTI_ID)
                     } else {
                         nm.notify(PAIR_NOTI_ID, buildPairNotification(pair))
+                    }
+                }
+        }
+    }
+
+    /** 有浏览器上传请求时发通知（App 在前台时由界面弹框，不重复打扰）。 */
+    private fun observePendingUpload() {
+        uiScope.launch {
+            combine(AppState.pendingUpload, AppState.uiVisible) { p, visible -> p to visible }
+                .collectLatest { (p, visible) ->
+                    val nm = getSystemService(NotificationManager::class.java) ?: return@collectLatest
+                    if (p == null || visible) {
+                        nm.cancel(WEB_NOTI_ID)
+                    } else {
+                        nm.notify(WEB_NOTI_ID, buildUploadNotification(p))
                     }
                 }
         }
@@ -214,6 +245,35 @@ class ReceiveService : Service() {
             .build()
     }
 
+    private fun buildUploadNotification(p: PendingUpload): Notification {
+        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), pendingFlags())
+        val accept = PendingIntent.getService(this, 5, Intent(this, ReceiveService::class.java).apply {
+            action = ACTION_WEB_ACCEPT
+            putExtra(EXTRA_UPLOAD_ID, p.id)
+        }, pendingFlags())
+        val reject = PendingIntent.getService(this, 6, Intent(this, ReceiveService::class.java).apply {
+            action = ACTION_WEB_REJECT
+            putExtra(EXTRA_UPLOAD_ID, p.id)
+        }, pendingFlags())
+
+        val detail = "${p.fileName} · ${NetUtils.formatSize(p.size)}"
+        return NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+            .setContentTitle("${p.guestName}（浏览器）想上传文件")
+            .setContentText(detail)
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .bigText("$detail\n接收后保存到 Download/飞鸽收件/，60 秒内未选择将自动拒绝")
+            )
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .addAction(0, "接收", accept)
+            .addAction(0, "拒绝", reject)
+            .build()
+    }
+
     override fun onDestroy() {
         job?.cancel()
         uiScope.launch {
@@ -222,6 +282,9 @@ class ReceiveService : Service() {
         }
         getSystemService(NotificationManager::class.java)?.cancel(ALERT_NOTI_ID)
         getSystemService(NotificationManager::class.java)?.cancel(PAIR_NOTI_ID)
+        getSystemService(NotificationManager::class.java)?.cancel(WEB_NOTI_ID)
+        web?.stop()
+        web = null
         engine?.stop()
         engine = null
         P2PEngineHolder.release()

@@ -16,6 +16,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -48,7 +49,7 @@ import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private object C {
+internal object C {
     val Blue = Color(0xFF1E6FD9)
     val Green = Color(0xFF1E9E4A)
     val Red = Color(0xFFC62828)
@@ -57,6 +58,7 @@ private object C {
     val Card = Color(0xFFFFFFFF)
     val Divider = Color(0xFFE8EAED)
     val Gray = Color(0xFF888888)
+    val Ink = Color(0xFF1C2026)
 }
 
 class MainActivity : ComponentActivity() {
@@ -116,6 +118,8 @@ fun AppScreen() {
     var showPair by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
+    var showWeb by remember { mutableStateOf(false) }
+    val webRunning by AppState.webRunning.collectAsState()
     var sheetPeer by remember { mutableStateOf<Peer?>(null) }
     var showManualDialog by remember { mutableStateOf(false) }
     var manualIp by remember { mutableStateOf("") }
@@ -216,8 +220,15 @@ fun AppScreen() {
         )
     }
 
+    // 浏览器访客上传 → 与 P2P 接收同一个确认心智（前台弹框，后台发通知）
+    UploadConfirmDialog()
+
     if (showPair) {
         PairScreen(onBack = { showPair = false })
+        return
+    }
+    if (showWeb) {
+        WebModeScreen(onBack = { showWeb = false })
         return
     }
     if (showSettings) {
@@ -269,16 +280,33 @@ fun AppScreen() {
                 }
             }
 
-            // 唯一的配对入口：默认只显示这一个按钮
+            // 两个并列入口：装 App 的设备扫码配对；没装 App 的朋友走浏览器
             item {
-                OutlinedButton(
-                    onClick = { showPair = true },
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("添加设备", fontSize = 14.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(
+                        onClick = { showPair = true },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("添加设备", fontSize = 14.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { showWeb = true },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, C.Blue),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = C.Blue)
+                    ) {
+                        Icon(Icons.Default.Language, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("网页模式", fontSize = 14.sp)
+                        if (webRunning) {
+                            Spacer(Modifier.width(6.dp))
+                            Box(Modifier.size(7.dp).background(C.Green, RoundedCornerShape(50)))
+                        }
+                    }
                 }
             }
 

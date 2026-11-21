@@ -71,6 +71,31 @@ data class PendingPair(
     val expireAt: Long
 )
 
+/**
+ * 浏览器访客。与 [Peer] 是两条不同的通道：访客只活在网页模式里，
+ * 不进 P2P 设备列表，断开即移除（关页就走，不像配对设备那样常驻）。
+ */
+data class WebGuest(
+    val id: String,
+    val nickname: String,
+    val remoteIp: String,
+    val status: String = "空闲",
+    val justJoined: Boolean = false
+) {
+    /** 列表右侧显示的状态，与 PC 端文案一致。 */
+    val label: String get() = status
+}
+
+/** 等待用户确认的上传请求（访客在浏览器里选了文件，60 秒内不处理即视为拒绝）。 */
+data class PendingUpload(
+    val id: String,
+    val fileName: String,
+    val size: Long,
+    val guestName: String,
+    val guestIp: String,
+    val expireAt: Long
+)
+
 data class ProgressInfo(val direction: TransferDirection, val fileName: String, val done: Long, val total: Long)
 
 /** 全局单例状态：UI 与后台服务通过它共享数据。 */
@@ -127,6 +152,38 @@ object AppState {
     private val _pendingPair = MutableStateFlow<PendingPair?>(null)
     val pendingPair: StateFlow<PendingPair?> = _pendingPair.asStateFlow()
     fun setPendingPair(p: PendingPair?) { _pendingPair.value = p }
+
+    // ---------------- 网页模式（浏览器访客） ----------------
+
+    /** 网页服务是否在运行；主界面入口据此显示小绿点。 */
+    private val _webRunning = MutableStateFlow(false)
+    val webRunning: StateFlow<Boolean> = _webRunning.asStateFlow()
+    fun setWebRunning(v: Boolean) { _webRunning.value = v }
+
+    /** 实际监听端口（可能因占用而顺延）。 */
+    private val _webPort = MutableStateFlow(0)
+    val webPort: StateFlow<Int> = _webPort.asStateFlow()
+    fun setWebPort(p: Int) { _webPort.value = p }
+
+    /** 访问 PIN；与地址族切换无关，只在刷新/连错 3 次/重启服务时变。 */
+    private val _webPin = MutableStateFlow("")
+    val webPin: StateFlow<String> = _webPin.asStateFlow()
+    fun setWebPin(p: String) { _webPin.value = p }
+
+    /** 在线访客列表（按加入时间）。 */
+    private val _webGuests = MutableStateFlow<List<WebGuest>>(emptyList())
+    val webGuests: StateFlow<List<WebGuest>> = _webGuests.asStateFlow()
+    fun setWebGuests(list: List<WebGuest>) { _webGuests.value = list }
+
+    /** 待用户确认的浏览器上传请求；非空时 UI 弹确认框、服务发通知。 */
+    private val _pendingUpload = MutableStateFlow<PendingUpload?>(null)
+    val pendingUpload: StateFlow<PendingUpload?> = _pendingUpload.asStateFlow()
+    fun setPendingUpload(p: PendingUpload?) { _pendingUpload.value = p }
+
+    /** PIN 因连错被自动更换的时间戳：界面据此高亮提示。 */
+    private val _pinRotatedAt = MutableStateFlow(0L)
+    val pinRotatedAt: StateFlow<Long> = _pinRotatedAt.asStateFlow()
+    fun notifyPinRotated() { _pinRotatedAt.value = System.currentTimeMillis() }
 
     /** 配对成功时间戳：界面据此弹出提示并收起配对页。 */
     private val _pairSuccess = MutableStateFlow(0L)

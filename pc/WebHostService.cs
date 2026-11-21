@@ -626,6 +626,8 @@ public sealed class WebHostService : IDisposable
         SseChannel? previous;
         lock (_lock)
         {
+            // 先登记新通道再关旧的：否则旧通道的收尾会认为"当前通道还是我"，
+            // 把刚重连上来的访客从列表里删掉（网络抖动后 EventSource 会带同一个 id 重连）
             previous = guest.Channel;
             guest.Channel = channel;
         }
@@ -689,11 +691,14 @@ public sealed class WebHostService : IDisposable
         finally
         {
             channel.Close();
+            bool current;
             lock (_lock)
             {
-                if (guest.Channel == channel) guest.Channel = null;
+                current = ReferenceEquals(guest.Channel, channel);
+                if (current) guest.Channel = null;
             }
-            RemoveGuest(guest, "已断开");
+            // 只有"当前这条"通道断开才算访客离线；被新连接顶掉的旧通道不算
+            if (current) RemoveGuest(guest, "已断开");
         }
     }
 
