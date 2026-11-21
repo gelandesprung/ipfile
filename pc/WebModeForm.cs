@@ -34,6 +34,8 @@ internal sealed class WebModeForm : Form
     private readonly ToolStripMenuItem _menuCopyIp = new("复制 IP 地址");
     private readonly ToolStripMenuItem _menuKick = new("断开此访客");
     private readonly ToolTip _tip = new();
+    /// <summary>PIN 被自动更换后短暂高亮，提示 Host 注意看新码。</summary>
+    private readonly System.Windows.Forms.Timer _pinFlash = new() { Interval = 2400 };
 
     private string _family = "v4";
     private bool _allowClose;
@@ -265,7 +267,7 @@ internal sealed class WebModeForm : Form
 
         right.Controls.Add(new Label
         {
-            Text = "让朋友用浏览器扫上面的码，或手输地址 + PIN 加入。\r\n切换地址族只影响新扫码的人：PIN 不变、已在线的访客不受影响。",
+            Text = "让朋友扫上面的码，或手输地址 + PIN 加入；连续输错 3 次 PIN 会自动更换。\r\n切换地址族只影响新扫码的人，已在线的访客不受影响。",
             Dock = DockStyle.Fill,
             ForeColor = Color.FromArgb(150, 156, 164),
             Font = new Font("微软雅黑", 8.5F),
@@ -508,6 +510,20 @@ internal sealed class WebModeForm : Form
             UpdateStatus();
         });
 
+        _web.PinRotated += pin => Ui(() =>
+        {
+            _pin.Text = pin;
+            _pin.ForeColor = Color.FromArgb(30, 111, 217);
+            _pinFlash.Stop();
+            _pinFlash.Start();
+        });
+
+        _pinFlash.Tick += (_, _) =>
+        {
+            _pinFlash.Stop();
+            _pin.ForeColor = Color.FromArgb(28, 32, 38);
+        };
+
         FormClosing += (_, e) =>
         {
             if (_allowClose) return;
@@ -520,6 +536,8 @@ internal sealed class WebModeForm : Form
     public void ForceClose()
     {
         _allowClose = true;
+        _pinFlash.Stop();
+        _pinFlash.Dispose();
         Close();
     }
 

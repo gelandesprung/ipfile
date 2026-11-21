@@ -381,6 +381,39 @@ Check("刷新 PIN 不踢在线访客（决策1）", web.SnapshotGuests().Count =
 var notFound = await http.GetAsync(baseUrl + "api/unknown");
 Check("未知接口返回 404", notFound.StatusCode == System.Net.HttpStatusCode.NotFound);
 
+// ---------- PIN 连续输错 3 次自动更换 ----------
+// 用 000001：NewPin 生成的是 100000–999999，绝不会撞上，保证这次一定是错的
+var wrongPin = "000001";
+var pinBase = web.RefreshPin();   // 顺手把之前的失败计数清零
+await PostJson(http, baseUrl + "api/join", new { nickname = "试错", pin = wrongPin });
+await PostJson(http, baseUrl + "api/join", new { nickname = "试错", pin = wrongPin });
+Check("连错 2 次 PIN 保持不变", web.Pin == pinBase, web.Pin);
+
+var rotatedEvents = new List<string>();
+web.PinRotated += p => { lock (rotatedEvents) rotatedEvents.Add(p); };
+
+var thirdWrong = await PostJson(http, baseUrl + "api/join", new { nickname = "试错", pin = wrongPin });
+var rotatedPin = web.Pin;
+Check("第 3 次输错后 PIN 自动更换", rotatedPin != pinBase, $"{pinBase} -> {rotatedPin}");
+Check("更换后的 PIN 仍是 6 位数字", rotatedPin.Length == 6 && rotatedPin.All(char.IsDigit), rotatedPin);
+Check("第 3 次输错返回「已更换」提示",
+    (thirdWrong.GetProperty("error").GetString() ?? "").Contains("更换"),
+    thirdWrong.GetProperty("error").GetString() ?? "");
+Check("PinRotated 事件把新 PIN 推给界面",
+    rotatedEvents.Count == 1 && rotatedEvents[0] == rotatedPin, string.Join(",", rotatedEvents));
+
+var oldPinJoin = await PostJson(http, baseUrl + "api/join", new { nickname = "老王", pin = pinBase });
+Check("旧 PIN 立即失效", !oldPinJoin.GetProperty("ok").GetBoolean());
+
+var newPinJoin = await PostJson(http, baseUrl + "api/join", new { nickname = "老王", pin = rotatedPin });
+Check("新 PIN 可正常加入", newPinJoin.GetProperty("ok").GetBoolean());
+Check("更换 PIN 不踢在线访客（决策1）", web.SnapshotGuests().Count == 2);
+
+var pinAfterJoin = web.Pin;
+await PostJson(http, baseUrl + "api/join", new { nickname = "试错", pin = wrongPin });
+await PostJson(http, baseUrl + "api/join", new { nickname = "试错", pin = wrongPin });
+Check("成功加入后失败计数已重置（再错 2 次不换码）", web.Pin == pinAfterJoin);
+
 web.Stop();
 Check("停止服务后访客全部清空", web.SnapshotGuests().Count == 0);
 try { Directory.Delete(webDir, true); } catch { }

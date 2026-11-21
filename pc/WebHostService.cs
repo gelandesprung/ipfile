@@ -122,6 +122,10 @@ public sealed class WebHostService : IDisposable
     private System.Threading.Timer? _maintenance;
     private string _pin = "";
     private DateTime _lastRaise = DateTime.MinValue;
+    /// <summary>连续输错 PIN 的次数，满 3 次自动换新码（换后清零）。</summary>
+    private int _pinFailures;
+    /// <summary>连续输错几次后自动更换 PIN。</summary>
+    private const int PinFailureLimit = 3;
 
     public WebHostService(AppConfig config) => _config = config;
 
@@ -137,6 +141,8 @@ public sealed class WebHostService : IDisposable
 
     /// <summary>访客列表变化（上线/离线/状态变更），UI 需切回自己的线程。</summary>
     public event Action? GuestsChanged;
+    /// <summary>PIN 因连续输错被自动更换，参数是新 PIN；UI 应刷新显示并提示。</summary>
+    public event Action<string>? PinRotated;
     public event Action<string>? Log;
     /// <summary>(方向, 文件名, 对端名, 已传, 总量)</summary>
     public event Action<string, string, string, long, long>? Progress;
@@ -173,7 +179,11 @@ public sealed class WebHostService : IDisposable
         _cts = new CancellationTokenSource();
         Port = used;
         Running = true;
-        lock (_lock) _pin = NewPin();
+        lock (_lock)
+        {
+            _pin = NewPin();
+            _pinFailures = 0;
+        }
 
         _ = Task.Run(() => AcceptLoopAsync(_cts.Token));
         _maintenance = new System.Threading.Timer(_ => Sweep(), null, 10_000, 10_000);
@@ -246,7 +256,11 @@ public sealed class WebHostService : IDisposable
     /// <summary>刷新 PIN：只挡新访客，已在线的访客不受影响（决策1：不踢人）。</summary>
     public string RefreshPin()
     {
-        lock (_lock) _pin = NewPin();
+        lock (_lock)
+        {
+            _pin = NewPin();
+            _pinFailures = 0;
+        }
         Log?.Invoke($"访问 PIN 已刷新为 {Pin}（已在线的访客不受影响）");
         return Pin;
     }
@@ -507,11 +521,39 @@ public sealed class WebHostService : IDisposable
 
         if (!string.Equals(pin.Trim(), Pin, StringComparison.Ordinal))
         {
+            // 连续输错满 3 次就把 PIN 换掉：熟人场景下大概率是记错了，
+            // 换码比反复试错更省事，也顺手挡掉在门外逐个试的陌生人。
+            string? rotated = null;
+            int failures;
+            lock (_lock)
+            {
+                failures = ++_pinFailures;
+                if (failures >= PinFailureLimit)
+                {
+                    _pin = NewPin();
+                    _pinFailures = 0;
+                    rotated = _pin;
+                }
+            }
+
+            if (rotated != null)
+            {
+                Log?.Invoke($"连续 {PinFailureLimit} 次 PIN 输错（来自 {req.RemoteIp}），已自动更换新 PIN：{rotated}");
+                PinRotated?.Invoke(rotated);
+                await WriteJsonAsync(req, 200, new
+                {
+                    ok = false,
+                    error = "PIN 已因多次输错而更换，请向主机索取新的 PIN"
+                }, ct);
+                return;
+            }
+
+            Log?.Invoke($"访客加入被拒绝（PIN 不正确，来自 {req.RemoteIp}，第 {failures} 次）");
             await WriteJsonAsync(req, 200, new { ok = false, error = "PIN 不正确，请向主机确认" }, ct);
-            Log?.Invoke($"访客加入被拒绝（PIN 不正确，来自 {req.RemoteIp}）");
             return;
         }
 
+        lock (_lock) _pinFailures = 0;
         nickname = SanitizeNickname(nickname);
         var guest = new WebGuest
         {
