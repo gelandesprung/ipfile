@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using FeigeP2P;
 
 static string Md5(string path)
@@ -20,7 +22,31 @@ static void GenFile(string path, int mb)
     for (int i = 0; i < mb; i++) { rnd.NextBytes(buf); fs.Write(buf); }
 }
 
+static async Task<JsonElement> PostJson(HttpClient http, string url, object payload)
+{
+    using var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+    using var resp = await http.PostAsync(url, content);
+    var text = await resp.Content.ReadAsStringAsync();
+    using var doc = JsonDocument.Parse(text);
+    return doc.RootElement.Clone();
+}
+
+/// <summary>从 SSE 流里读下一条 data: 事件（注释行与空行跳过）。</summary>
+static async Task<JsonElement?> ReadSse(StreamReader reader, CancellationToken ct)
+{
+    while (!ct.IsCancellationRequested)
+    {
+        var line = await reader.ReadLineAsync(ct);
+        if (line == null) return null;
+        if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
+        using var doc = JsonDocument.Parse(line[6..]);
+        return doc.RootElement.Clone();
+    }
+    return null;
+}
+
 int passed = 0, failed = 0;
+
 void Check(string name, bool ok, string detail = "")
 {
     if (ok) { Console.WriteLine($"  PASS  {name} {detail}"); passed++; }
@@ -244,6 +270,120 @@ Check("拒绝后可用同一 token 重试", retry.Ok, retry.Message);
 receiver.Dispose();
 sender.Dispose();
 try { Directory.Delete(tmpSend, true); } catch { }
+
+// ---------- 6. 网页模式（浏览器访客） ----------
+Console.WriteLine("\n[6] 网页模式：加入 / 下行发送 / 上行接收");
+
+const int WebPort = 25160;
+var webCfg = new AppConfig { DeviceName = "网页测试机", TcpPort = 25162, WebPort = WebPort };
+using var web = new WebHostService(webCfg);
+
+var webDir = Path.Combine(Path.GetTempPath(), "feige_web_" + Guid.NewGuid().ToString("N")[..8]);
+Directory.CreateDirectory(webDir);
+var uploadTarget = Path.Combine(webDir, "从浏览器上传.bin");
+var rejectUploads = false;
+web.ConfirmUpload += _ => Task.FromResult(
+    rejectUploads ? new ReceiveDecision(false) : new ReceiveDecision(true, uploadTarget));
+
+var finishedEvents = new List<string>();
+web.Finished += (dir, name, peer, size, ok, msg) =>
+{
+    lock (finishedEvents) finishedEvents.Add($"{dir}|{name}|{ok}");
+};
+
+var webStart = web.Start(WebPort);
+Check("网页服务启动并绑定指定端口", webStart.Ok && web.Port == WebPort, webStart.Message);
+Check("启动即生成 6 位数字 PIN", web.Pin.Length == 6 && web.Pin.All(char.IsDigit), web.Pin);
+
+using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+var baseUrl = $"http://127.0.0.1:{web.Port}/";
+
+var page = await http.GetStringAsync(baseUrl);
+Check("访客页可直接打开（零安装）", page.Contains("加入飞鸽") && page.Contains("/api/join"), $"{page.Length} 字节");
+Check("页面自包含、不依赖外部资源", !page.Contains("{{") && !page.Contains("cdn.") && !page.Contains("<script src"));
+
+var badJoin = await PostJson(http, baseUrl + "api/join", new { nickname = "小美", pin = "000000" });
+Check("PIN 错误被拒", !badJoin.GetProperty("ok").GetBoolean(), badJoin.GetProperty("error").GetString() ?? "");
+Check("PIN 错误不产生访客", web.SnapshotGuests().Count == 0);
+
+var join = await PostJson(http, baseUrl + "api/join", new { nickname = "小美", pin = web.Pin });
+var clientId = join.GetProperty("ok").GetBoolean() ? join.GetProperty("clientId").GetString() ?? "" : "";
+Check("正确 PIN 可加入", clientId.Length > 0, clientId);
+Check("访客以填写的昵称出现在 Host 列表",
+    web.SnapshotGuests().Count == 1 && web.SnapshotGuests()[0].Nickname.Contains("小美"));
+
+using var sseCts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+var sseResp = await http.SendAsync(
+    new HttpRequestMessage(HttpMethod.Get, baseUrl + "api/events?c=" + clientId),
+    HttpCompletionOption.ResponseHeadersRead, sseCts.Token);
+using var sseReader = new StreamReader(
+    await sseResp.Content.ReadAsStreamAsync(sseCts.Token), Encoding.UTF8);
+var snapshot = await ReadSse(sseReader, sseCts.Token);
+Check("信令通道首帧为身份快照",
+    snapshot != null && snapshot.Value.GetProperty("type").GetString() == "snapshot");
+
+// 下行：Host 发文件 → 访客确认 → 走普通 HTTP 取文件
+var downFile = Path.Combine(webDir, "给朋友的照片.jpg");
+await File.WriteAllBytesAsync(downFile, RandomNumberGenerator.GetBytes(256 * 1024));
+var downSize = new FileInfo(downFile).Length;
+var sendTask = web.SendFilesAsync(new[] { clientId }, new[] { downFile });
+
+var offerEv = await ReadSse(sseReader, sseCts.Token);
+Check("访客收到 file_offer 信令（文件本体不走信令）",
+    offerEv != null && offerEv.Value.GetProperty("type").GetString() == "file_offer");
+var offerId = offerEv!.Value.GetProperty("id").GetString() ?? "";
+var offerToken = offerEv.Value.GetProperty("token").GetString() ?? "";
+
+var beforeAccept = await http.GetAsync(baseUrl + "api/blob/" + offerToken);
+Check("未确认前下载链接不可用",
+    beforeAccept.StatusCode == System.Net.HttpStatusCode.NotFound);
+
+var accept = await PostJson(http, $"{baseUrl}api/offer/{offerId}/accept", new { });
+Check("访客确认后服务端才放行", accept.GetProperty("ok").GetBoolean());
+
+var downloaded = await http.GetByteArrayAsync(baseUrl + "api/blob/" + offerToken);
+Check("文件按字节完整送达",
+    downloaded.LongLength == downSize &&
+    Convert.ToHexString(MD5.HashData(downloaded)).ToLowerInvariant() == Md5(downFile));
+await sendTask;
+lock (finishedEvents)
+    Check("Host 侧记录发送完成", finishedEvents.Any(e => e.StartsWith("发送|") && e.EndsWith("|True")));
+
+// 上行：两阶段（先 offer 问 Host，同意后才 PUT 内容）
+var upBytes = RandomNumberGenerator.GetBytes(180 * 1024);
+var upOffer = await PostJson(http, baseUrl + "api/upload/offer",
+    new { clientId, name = "contract.bin", size = upBytes.Length });
+Check("上传第一阶段：请求 Host 确认", upOffer.GetProperty("ok").GetBoolean());
+
+var uploadId = upOffer.GetProperty("uploadId").GetString() ?? "";
+var putResp = await http.PutAsync(baseUrl + "api/upload/" + uploadId, new ByteArrayContent(upBytes));
+var putText = await putResp.Content.ReadAsStringAsync();
+Check("上传第二阶段：流式落盘成功",
+    putText.Contains("\"ok\":true") && File.Exists(uploadTarget) &&
+    new FileInfo(uploadTarget).Length == upBytes.Length, $"{upBytes.Length} 字节");
+Check("落盘内容与上传一致",
+    File.Exists(uploadTarget) &&
+    Convert.ToHexString(MD5.HashData(upBytes)).ToLowerInvariant() == Md5(uploadTarget));
+lock (finishedEvents)
+    Check("Host 侧记录接收完成", finishedEvents.Any(e => e.StartsWith("收到|contract.bin|True")));
+
+rejectUploads = true;
+var rejectedUpload = await PostJson(http, baseUrl + "api/upload/offer",
+    new { clientId, name = "不想要的.exe", size = 10 });
+Check("Host 拒绝时上传不进入传输阶段", !rejectedUpload.GetProperty("ok").GetBoolean());
+rejectUploads = false;
+
+var oldPin = web.Pin;
+var newPin = web.RefreshPin();
+Check("刷新 PIN 生成新码", newPin.Length == 6 && newPin != oldPin);
+Check("刷新 PIN 不踢在线访客（决策1）", web.SnapshotGuests().Count == 1);
+
+var notFound = await http.GetAsync(baseUrl + "api/unknown");
+Check("未知接口返回 404", notFound.StatusCode == System.Net.HttpStatusCode.NotFound);
+
+web.Stop();
+Check("停止服务后访客全部清空", web.SnapshotGuests().Count == 0);
+try { Directory.Delete(webDir, true); } catch { }
 
 Console.WriteLine($"\n========== 结果：{passed} 通过 / {failed} 失败 ==========");
 Environment.Exit(failed == 0 ? 0 : 1);

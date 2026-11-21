@@ -520,7 +520,8 @@ public sealed class TransferService : IDisposable
         catch { return null; }
     }
 
-    private static string NonOverwritePath(string dir, string fileName)
+    /// <summary>同名不覆盖：自动加 (1)(2)…；网页模式上传落盘也复用这一条规则。</summary>
+    internal static string NonOverwritePath(string dir, string fileName)
     {
         var full = Path.Combine(dir, fileName);
         if (!File.Exists(full)) return full;

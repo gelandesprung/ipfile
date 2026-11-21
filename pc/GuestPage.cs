@@ -1,0 +1,500 @@
+namespace FeigeP2P;
+
+/// <summary>
+/// 浏览器访客端单页（零安装）。由 WebHostService 直接吐出，不依赖任何外部资源。
+/// 四态：加入 → 等待/空闲 → 收到文件确认（60 秒倒计时）→ 传输中（收/发复用同一个进度视图）。
+/// 信令走 SSE（EventSource，自动重连）；文件本体走普通 HTTP 下载/上传，避免大文件进内存。
+/// </summary>
+internal static class GuestPage
+{
+    public const string Html =
+"""
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1E6FD9">
+<title>飞鸽 · 收文件</title>
+<style>
+  :root{
+    --blue:#1E6FD9;--green:#1E9E4A;--red:#C62828;--amber:#B8860B;
+    --ink:#1C2026;--sub:#888;--line:#E8EAED;--bg:#F5F6F8;--card:#fff;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Roboto,sans-serif;
+    background:var(--bg);color:var(--ink);line-height:1.6;
+    min-height:100vh;
+  }
+  .wrap{max-width:480px;margin:0 auto;padding:26px 18px 48px}
+  .brand{display:flex;align-items:center;gap:9px;margin-bottom:22px}
+  .brand .logo{font-size:17px;font-weight:600;letter-spacing:.5px}
+  .brand .dot{width:8px;height:8px;border-radius:50%;background:#C9CED6;transition:background .2s}
+  .brand .dot.on{background:var(--green)}
+  h1{font-size:20px;font-weight:600;margin:0 0 6px}
+  .sub{color:var(--sub);font-size:13px;margin:0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-top:16px}
+  .card-title{font-size:13px;font-weight:600;margin-bottom:8px}
+  label{display:block;font-size:13px;color:#3A4149;margin:14px 0 6px}
+  label:first-of-type{margin-top:0}
+  input{
+    width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;
+    font-size:16px;font-family:inherit;background:#fff;outline:none;transition:border-color .15s,box-shadow .15s;
+  }
+  input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(30,111,217,.12)}
+  input::placeholder{color:#B6BCC5}
+  .btn{
+    width:100%;padding:13px;border:none;border-radius:10px;font-size:15px;font-weight:500;
+    font-family:inherit;cursor:pointer;transition:opacity .15s,transform .08s;
+  }
+  .btn:active{transform:translateY(1px)}
+  .btn:disabled{opacity:.45;cursor:default}
+  .btn.primary{background:var(--blue);color:#fff}
+  .btn.green{background:var(--green);color:#fff}
+  .btn.ghost{background:#fff;border:1px solid var(--line);color:var(--ink)}
+  .err{color:var(--red);font-size:13px;min-height:20px;margin-top:10px}
+  .hint{color:var(--sub);font-size:12px;margin-top:10px;line-height:1.55}
+  .foot{color:#A8AEB8;font-size:12px;text-align:center;margin-top:18px;line-height:1.7}
+
+  /* 已连接页 */
+  .row-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+  .row-top .name{font-size:19px;font-weight:600}
+  .badge{
+    display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--green);
+    background:#E9F6EE;border-radius:20px;padding:4px 10px;white-space:nowrap;
+  }
+  .badge i{width:6px;height:6px;border-radius:50%;background:var(--green);display:block}
+  .badge.off{color:var(--amber);background:#FBF3E2}
+  .badge.off i{background:var(--amber)}
+  .wait{display:flex;align-items:center;gap:9px;font-size:14px}
+  .wait b{font-weight:600}
+  .pulse{width:9px;height:9px;border-radius:50%;background:var(--blue);position:relative;flex:none}
+  .pulse::after{
+    content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid rgba(30,111,217,.35);
+    animation:pulse 1.8s ease-out infinite;
+  }
+  @keyframes pulse{0%{transform:scale(.6);opacity:1}100%{transform:scale(1.5);opacity:0}}
+
+  /* 传输进度 */
+  .fname{font-size:16px;font-weight:600;word-break:break-all;margin-bottom:4px}
+  .bar{height:8px;background:var(--line);border-radius:6px;overflow:hidden;margin:16px 0 8px}
+  .bar>i{display:block;height:100%;width:0;background:var(--blue);border-radius:6px;transition:width .18s}
+  .bar>i.done{background:var(--green)}
+  .trmeta{display:flex;justify-content:space-between;font-size:12px;color:var(--sub)}
+  .ok-mark{display:flex;align-items:center;gap:8px;color:var(--green);font-size:14px;font-weight:600;margin-top:14px}
+
+  /* 确认卡 */
+  .overlay{
+    position:fixed;inset:0;background:rgba(20,24,30,.42);display:flex;align-items:flex-end;
+    justify-content:center;padding:0;z-index:20;backdrop-filter:blur(2px);
+  }
+  @media(min-width:560px){.overlay{align-items:center;padding:20px}}
+  .sheet{
+    background:#fff;width:100%;max-width:440px;border-radius:18px 18px 0 0;padding:22px 20px calc(22px + env(safe-area-inset-bottom));
+    animation:up .22s ease-out;
+  }
+  @media(min-width:560px){.sheet{border-radius:18px}}
+  @keyframes up{from{transform:translateY(14px);opacity:.6}to{transform:none;opacity:1}}
+  .sheet-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .tag{font-size:11px;color:var(--blue);background:#E6F1FB;border-radius:6px;padding:3px 8px}
+  .cd{font-size:12px;color:var(--sub)}
+  .cd.warn{color:var(--red)}
+  .btns{display:flex;gap:10px;margin-top:18px}
+  .btns .btn{flex:1}
+
+  .recent-row{display:flex;justify-content:space-between;font-size:12.5px;padding:7px 0;border-top:1px solid var(--line)}
+  .recent-row:first-child{border-top:none}
+  .recent-row span:last-child{color:var(--sub);font-size:12px}
+
+  .toast{
+    position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(10px);
+    background:rgba(28,32,38,.94);color:#fff;font-size:13px;padding:9px 16px;border-radius:20px;
+    opacity:0;pointer-events:none;transition:.22s;z-index:40;max-width:90vw;text-align:center;
+  }
+  .toast.on{opacity:1;transform:translateX(-50%)}
+  [hidden]{display:none !important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><span class="logo">飞鸽</span><span class="dot" id="connDot"></span></div>
+
+  <!-- ① 加入 -->
+  <section id="view-join">
+    <h1>加入飞鸽</h1>
+    <p class="sub">朋友用浏览器给你传文件，不用装任何 App</p>
+    <div class="card">
+      <label for="nick">你的昵称</label>
+      <input id="nick" maxlength="16" placeholder="例如 小美" autocomplete="nickname" autocapitalize="off">
+      <label for="pin">访问 PIN</label>
+      <input id="pin" inputmode="numeric" maxlength="6" placeholder="6 位数字" autocomplete="one-time-code">
+      <button class="btn primary" id="joinBtn" style="margin-top:18px">进入</button>
+      <div class="err" id="joinErr"></div>
+    </div>
+    <p class="foot">PIN 由主机当面告知<br>仅同一 WiFi / 热点下可用</p>
+  </section>
+
+  <!-- ② 已连接 · 等待 -->
+  <section id="view-idle" hidden>
+    <div class="row-top">
+      <div>
+        <div class="name" id="who">—</div>
+        <div class="sub">已连接到 <span id="hostName">主机</span></div>
+      </div>
+      <span class="badge" id="stateBadge"><i></i>已连接</span>
+    </div>
+    <div class="card">
+      <div class="wait"><span class="pulse"></span>等待 <b id="hostName2">主机</b> 发送文件</div>
+      <div class="hint">主机选了文件发给你时，这里会弹出确认框；你也可以先把文件传给它</div>
+    </div>
+    <div class="card">
+      <div class="card-title">上传文件给主机</div>
+      <button class="btn ghost" id="upBtn">↑ 选择文件</button>
+      <div class="hint">主机确认后才会真正接收，PC 上由主机选择保存位置</div>
+    </div>
+    <div class="card" id="recentCard" hidden>
+      <div class="card-title">本次记录</div>
+      <div id="recentList"></div>
+    </div>
+    <input type="file" id="file" hidden>
+  </section>
+
+  <!-- ③ 传输中（收/发共用） -->
+  <section id="view-transfer" hidden>
+    <div class="card">
+      <div class="card-title" id="trTitle">正在接收</div>
+      <div class="fname" id="trName">—</div>
+      <div class="bar"><i id="trBar"></i></div>
+      <div class="trmeta"><span id="trBytes">0 B</span><span id="trPct">0%</span></div>
+      <div class="ok-mark" id="trOk" hidden><span>✓</span><span id="trOkText">完成</span></div>
+    </div>
+    <button class="btn ghost" id="trBack" style="margin-top:14px" hidden>返回</button>
+  </section>
+</div>
+
+<!-- 收到文件确认卡 -->
+<div class="overlay" id="sheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head">
+      <span class="tag">收到文件</span>
+      <span class="cd" id="cd">剩余 01:00</span>
+    </div>
+    <div class="fname" id="oName">—</div>
+    <div class="sub" id="oSize">—</div>
+    <div class="btns">
+      <button class="btn ghost" id="rejectBtn">拒绝</button>
+      <button class="btn green" id="acceptBtn">接收</button>
+    </div>
+    <div class="hint">接收后开始传输，文件保存到浏览器下载目录</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  var $ = function(s){ return document.querySelector(s); };
+  var app = { id:null, nick:'', host:'', es:null, offer:null, cd:null, recent:[] };
+
+  function fmt(n){
+    if(!n && n !== 0) return '—';
+    if(n < 1024) return n + ' B';
+    if(n < 1048576) return (n/1024).toFixed(1) + ' KB';
+    if(n < 1073741824) return (n/1048576).toFixed(1) + ' MB';
+    return (n/1073741824).toFixed(2) + ' GB';
+  }
+  function show(view){
+    ['join','idle','transfer'].forEach(function(k){
+      var el = $('#view-' + k);
+      if(el) el.hidden = (k !== view);
+    });
+  }
+  function toast(msg){
+    var t = $('#toast');
+    t.textContent = msg;
+    t.classList.add('on');
+    clearTimeout(t._t);
+    t._t = setTimeout(function(){ t.classList.remove('on'); }, 2400);
+  }
+  function post(url, body){
+    return fetch(url, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body || {})
+    }).then(function(r){ return r.json(); });
+  }
+
+  // ---------- 加入 ----------
+  $('#joinBtn').addEventListener('click', join);
+  $('#pin').addEventListener('keydown', function(e){ if(e.key === 'Enter') join(); });
+  $('#nick').addEventListener('keydown', function(e){ if(e.key === 'Enter') $('#pin').focus(); });
+
+  function join(){
+    var nick = $('#nick').value.trim();
+    var pin = $('#pin').value.trim();
+    var err = $('#joinErr');
+    err.textContent = '';
+    if(!/^\d{6}$/.test(pin)){ err.textContent = '请输入 6 位数字 PIN'; return; }
+    var btn = $('#joinBtn');
+    btn.disabled = true; btn.textContent = '正在进入…';
+    post('/api/join', { nickname:nick, pin:pin }).then(function(r){
+      btn.disabled = false; btn.textContent = '进入';
+      if(!r.ok){ err.textContent = r.error || '加入失败'; return; }
+      app.id = r.clientId;
+      app.nick = r.nickname;
+      app.host = r.host || '主机';
+      $('#who').textContent = app.nick;
+      $('#hostName').textContent = app.host;
+      $('#hostName2').textContent = app.host;
+      show('idle');
+      connect();
+    }).catch(function(){
+      btn.disabled = false; btn.textContent = '进入';
+      err.textContent = '连不上主机，请确认在同一 WiFi 下';
+    });
+  }
+
+  // ---------- 信令 ----------
+  function connect(){
+    if(app.es) app.es.close();
+    var es = new EventSource('/api/events?c=' + encodeURIComponent(app.id));
+    app.es = es;
+    es.onopen = function(){ $('#connDot').classList.add('on'); badge(true); };
+    es.onerror = function(){ $('#connDot').classList.remove('on'); badge(false); };
+    es.onmessage = function(e){
+      var ev;
+      try { ev = JSON.parse(e.data); } catch(err){ return; }
+      if(ev.type === 'snapshot'){
+        if(ev.nickname) { app.nick = ev.nickname; $('#who').textContent = app.nick; }
+        if(ev.host){ app.host = ev.host; $('#hostName').textContent = app.host; $('#hostName2').textContent = app.host; }
+        badge(true);
+      } else if(ev.type === 'file_offer'){
+        showOffer(ev);
+      } else if(ev.type === 'offer_cancel'){
+        if(app.offer && app.offer.id === ev.id){ closeSheet(); toast(ev.reason || '发送已取消'); }
+      } else if(ev.type === 'shutdown'){
+        $('#sheet').hidden = true;
+        toast('主机已停止服务');
+        badge(false);
+        if(app.es){ app.es.close(); app.es = null; }
+      }
+    };
+  }
+
+  function badge(on){
+    var b = $('#stateBadge');
+    b.classList.toggle('off', !on);
+    b.innerHTML = on ? '<i></i>已连接' : '<i></i>重连中';
+  }
+
+  // ---------- 收到文件确认 ----------
+  function showOffer(o){
+    app.offer = o;
+    $('#oName').textContent = o.name;
+    $('#oSize').textContent = fmt(o.size) + ' · 来自 ' + app.host;
+    $('#sheet').hidden = false;
+    $('#acceptBtn').disabled = false;
+    $('#rejectBtn').disabled = false;
+    startCd(o.ttl || 60);
+  }
+
+  function startCd(seconds){
+    stopCd();
+    var left = seconds;
+    renderCd(left);
+    app.cd = setInterval(function(){
+      left--;
+      if(left <= 0){ stopCd(); closeSheet(); toast('超时未确认，本次发送已取消'); return; }
+      renderCd(left);
+    }, 1000);
+  }
+  function renderCd(left){
+    var m = Math.floor(left/60), s = left % 60;
+    var el = $('#cd');
+    el.textContent = '剩余 ' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    el.classList.toggle('warn', left <= 15);
+  }
+  function stopCd(){ if(app.cd){ clearInterval(app.cd); app.cd = null; } }
+  function closeSheet(){ stopCd(); $('#sheet').hidden = true; app.offer = null; }
+
+  $('#rejectBtn').addEventListener('click', function(){
+    var o = app.offer; if(!o) return;
+    post('/api/offer/' + o.id + '/reject');
+    closeSheet();
+    toast('已拒绝，未接收该文件');
+  });
+
+  $('#acceptBtn').addEventListener('click', function(){
+    var o = app.offer; if(!o) return;
+    $('#acceptBtn').disabled = true;
+    $('#rejectBtn').disabled = true;
+    post('/api/offer/' + o.id + '/accept').then(function(r){
+      closeSheet();
+      if(!r.ok){ toast(r.error || '该请求已失效'); return; }
+      download(o);
+    }).catch(function(){
+      closeSheet();
+      toast('确认失败，请重试');
+    });
+  });
+
+  // ---------- 下载（主机 → 我）----------
+  function setProgress(done, total){
+    var pct = total > 0 ? Math.min(100, Math.round(done * 100 / total)) : 0;
+    $('#trBar').style.width = pct + '%';
+    $('#trBar').classList.toggle('done', pct >= 100);
+    $('#trBytes').textContent = fmt(done) + (total > 0 ? ' / ' + fmt(total) : '');
+    $('#trPct').textContent = pct + '%';
+  }
+
+  function download(o){
+    show('transfer');
+    $('#trTitle').textContent = '正在接收';
+    $('#trName').textContent = o.name;
+    $('#trOk').hidden = true;
+    $('#trBack').hidden = true;
+    setProgress(0, o.size);
+
+    // 超大文件不塞进内存，交给浏览器原生下载（自带进度与断点）
+    if(o.size > 300 * 1024 * 1024){
+      var a = document.createElement('a');
+      a.href = '/api/blob/' + encodeURIComponent(o.token);
+      a.download = o.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      $('#trBytes').textContent = '浏览器正在下载…';
+      $('#trPct').textContent = '';
+      finish(o.name, '已交给浏览器下载', '收到');
+      return;
+    }
+
+    fetch('/api/blob/' + encodeURIComponent(o.token)).then(function(resp){
+      if(!resp.ok || !resp.body) throw new Error('下载失败');
+      var total = Number(resp.headers.get('Content-Length')) || o.size;
+      var reader = resp.body.getReader();
+      var chunks = [], got = 0;
+      function pump(){
+        return reader.read().then(function(r){
+          if(r.done){ return; }
+          chunks.push(r.value); got += r.value.length;
+          setProgress(got, total);
+          return pump();
+        });
+      }
+      return pump().then(function(){
+        var blob = new Blob(chunks);
+        saveBlob(blob, o.name);
+        setProgress(total, total);
+        finish(o.name, '已保存到下载目录', '收到');
+      });
+    }).catch(function(err){
+      $('#trTitle').textContent = '接收失败';
+      $('#trBytes').textContent = err.message || '传输中断';
+      $('#trPct').textContent = '';
+      $('#trBack').hidden = false;
+    });
+  }
+
+  function saveBlob(blob, name){
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 30000);
+  }
+
+  function finish(name, text, dir){
+    $('#trTitle').textContent = '完成';
+    $('#trOk').hidden = false;
+    $('#trOkText').textContent = text;
+    $('#trBar').classList.add('done');
+    $('#trBack').hidden = false;
+    addRecent(name, dir, text);
+  }
+
+  // ---------- 上传（我 → 主机）----------
+  $('#upBtn').addEventListener('click', function(){ $('#file').click(); });
+
+  $('#file').addEventListener('change', function(e){
+    var f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if(!f) return;
+
+    show('transfer');
+    $('#trTitle').textContent = '等待主机确认';
+    $('#trName').textContent = f.name;
+    $('#trOk').hidden = true;
+    $('#trBack').hidden = true;
+    setProgress(0, f.size);
+    $('#trBytes').textContent = '最多等 60 秒…';
+    $('#trPct').textContent = '';
+
+    post('/api/upload/offer', { clientId: app.id, name: f.name, size: f.size }).then(function(r){
+      if(!r.ok){
+        $('#trTitle').textContent = '未发送';
+        $('#trBytes').textContent = r.error || '主机拒绝接收';
+        $('#trBack').hidden = false;
+        return;
+      }
+      $('#trTitle').textContent = '正在发送给主机';
+      var xhr = new XMLHttpRequest();
+      xhr.open('PUT', '/api/upload/' + encodeURIComponent(r.uploadId));
+      xhr.upload.onprogress = function(ev){
+        if(ev.lengthComputable) setProgress(ev.loaded, ev.total);
+      };
+      xhr.onload = function(){
+        var ok = false;
+        try { var j = JSON.parse(xhr.responseText); ok = !!j.ok; } catch(err){}
+        if(ok){
+          setProgress(f.size, f.size);
+          finish(f.name, '已发送给 ' + app.host, '发出');
+        } else {
+          $('#trTitle').textContent = '发送失败';
+          $('#trBytes').textContent = '主机未接收完整的文件';
+          $('#trPct').textContent = '';
+          $('#trBack').hidden = false;
+        }
+      };
+      xhr.onerror = function(){
+        $('#trTitle').textContent = '发送失败';
+        $('#trBytes').textContent = '网络中断';
+        $('#trBack').hidden = false;
+      };
+      xhr.send(f);
+    }).catch(function(){
+      $('#trTitle').textContent = '发送失败';
+      $('#trBytes').textContent = '连不上主机';
+      $('#trBack').hidden = false;
+    });
+  });
+
+  $('#trBack').addEventListener('click', function(){ show('idle'); });
+
+  // ---------- 本次记录 ----------
+  function addRecent(name, dir, text){
+    app.recent.unshift({ name:name, dir:dir, text:text });
+    app.recent = app.recent.slice(0, 3);
+    var card = $('#recentCard'), list = $('#recentList');
+    list.innerHTML = '';
+    app.recent.forEach(function(r){
+      var row = document.createElement('div');
+      row.className = 'recent-row';
+      var l = document.createElement('span');
+      l.textContent = (r.dir === '收到' ? '↓ ' : '↑ ') + r.name;
+      var rt = document.createElement('span');
+      rt.textContent = r.dir === '收到' ? '已接收' : '已发送';
+      row.appendChild(l); row.appendChild(rt);
+      list.appendChild(row);
+    });
+    card.hidden = false;
+  }
+
+  // 进页面就把焦点放在昵称上（手机端会直接弹键盘，少一次点击）
+  setTimeout(function(){ var n = $('#nick'); if(n && !n.value) n.focus(); }, 300);
+})();
+</script>
+</body>
+</html>
+""";
+}

@@ -101,6 +101,9 @@ public sealed class AppConfig
     public int UdpPort { get; set; } = 2425;
     public int TcpPort { get; set; } = 2425;
 
+    /// <summary>网页模式端口（浏览器访客访问）。默认 8080，被占用时服务会自动往后找可用端口。</summary>
+    public int WebPort { get; set; } = 8080;
+
     /// <summary>最近传输的文件（最多 5 条，最新在前），关掉程序再打开还在。</summary>
     public List<RecentItem> Recent { get; set; } = new();
 
@@ -205,6 +208,19 @@ public sealed class AppConfig
 
     /// <summary>取最优的一个局域网地址；都没有时回退回环地址。</summary>
     public static string GetLocalIp() => GetLocalIpCandidates().FirstOrDefault() ?? "127.0.0.1";
+
+    /// <summary>
+    /// 仅取 IPv6 地址；本机没有可用的公网/ULA IPv6 时返回 null。
+    /// 网页模式的地址族切换必须用这个——不能用 GetLocalIp()，那个在没有 v6 时会返回 v4 地址，
+    /// 拿去拼 <c>http://[v4]:port</c> 会得到一个对方根本连不上的地址。
+    /// </summary>
+    public static string? GetLocalIpV6Only()
+        => GetLocalIpCandidates().FirstOrDefault(ip => ip.Contains(':'));
+
+    /// <summary>仅取 IPv4 地址；没有时返回 null（网页模式据此隐藏/禁用 IPv4 选项）。</summary>
+    public static string? GetLocalIpV4Only()
+        => GetLocalIpCandidates().FirstOrDefault(ip => !ip.Contains(':'));
+
 
     /// <summary>
     /// 本机 IPv4 地址（UDP 广播用）。广播只能走 IPv4，所以这里必须跳过 IPv6 地址，

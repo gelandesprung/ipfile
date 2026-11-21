@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>飞鸽 P2P · 完整界面与交互展示</title>
+<style>
+  :root{
+    --blue:#1E6FD9; --green:#1E9E4A; --red:#C62828; --amber:#B8860B;
+    --bg:#FAFAFA; --card:#FFFFFF; --line:#E8EAED; --sub:#888888; --ink:#1C2026;
+    --blue-50:#E6F1FB; --green-50:#E1F5EE;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Roboto,sans-serif;
+    background:#EFEFF1;color:var(--ink);line-height:1.6;padding:32px 20px 80px;
+  }
+  .page{max-width:1360px;margin:0 auto}
+  header.top{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:28px 32px;margin-bottom:28px}
+  header.top h1{font-size:24px;font-weight:600;letter-spacing:.5px}
+  header.top .sub{color:var(--sub);font-size:14px;margin-top:8px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+  .chip{font-size:12px;padding:5px 12px;border-radius:20px;background:var(--blue-50);color:var(--blue)}
+  .chip.g{background:var(--green-50);color:var(--green)}
+  .chip.a{background:#FBF0DC;color:var(--amber)}
+
+  .section{margin-top:36px}
+  .section-title{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+  .section-title .num{width:28px;height:28px;border-radius:8px;background:var(--ink);color:#fff;font-size:14px;display:flex;align-items:center;justify-content:center;font-weight:500}
+  .section-title h2{font-size:18px;font-weight:600}
+  .section-desc{color:var(--sub);font-size:13px;margin:0 0 18px 40px}
+
+  .grid{display:grid;gap:22px;align-items:start}
+  .grid.two{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+  .grid.three{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+
+  .frame{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .frame-cap{font-size:12px;color:var(--sub);padding:12px 16px;border-bottom:1px solid var(--line);background:#FCFCFD;display:flex;justify-content:space-between;align-items:center}
+  .frame-cap b{color:var(--ink);font-weight:500;font-size:13px}
+
+  .screen{background:var(--bg)}
+
+  /* 手机外框 */
+  .phone{width:300px;max-width:100%;background:var(--card);border:1px solid var(--line);border-radius:22px;overflow:hidden;margin:0 auto}
+  .statusbar{display:flex;justify-content:space-between;padding:10px 16px 4px;font-size:11px;color:var(--ink)}
+  .appbar{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line)}
+  .appbar .t{font-size:15px;font-weight:600}
+  .appbar .a{font-size:12px;color:var(--sub);display:flex;gap:12px}
+
+  .pad{padding:14px 16px}
+  .local{font-size:12px;color:var(--sub);padding:0 16px 12px}
+  .local b{color:var(--ink);font-weight:500}
+  .row-title{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:500;padding:2px 0 8px}
+  .row-title .count{font-size:12px;color:var(--sub);font-weight:400}
+
+  .entry{display:flex;gap:8px;padding:0 16px 14px}
+  .entry-btn{flex:1;border:1px solid var(--line);border-radius:8px;padding:10px 8px;text-align:center;font-size:12px;color:var(--ink);background:#fff}
+  .entry-btn.new{border-color:var(--blue);color:var(--blue)}
+
+  /* 可点击的入口（演示动线） */
+  .tap{cursor:pointer;position:relative;transition:transform .12s ease,box-shadow .12s ease}
+  .tap:hover{box-shadow:0 0 0 3px rgba(30,111,217,.14);transform:translateY(-1px)}
+  .tap::after{content:"点击体验 ↗";position:absolute;top:-9px;right:-6px;background:var(--blue);color:#fff;font-size:10px;line-height:1;padding:3px 6px;border-radius:8px;white-space:nowrap}
+  .tap.on-pc::after{top:-8px;right:-4px}
+  .entry-btn.new.tap::after{content:"点击进入 ↗";top:-8px;right:-6px}
+  .flash{animation:flashRing 1.5s ease}
+  @keyframes flashRing{
+    0%{box-shadow:0 0 0 0 rgba(30,111,217,.55);border-color:var(--blue)}
+    60%{box-shadow:0 0 0 8px rgba(30,111,217,0);border-color:var(--blue)}
+    100%{box-shadow:0 0 0 0 rgba(30,111,217,0)}
+  }
+
+  /* 入口动线条 */
+  .entryflow{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:10px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:22px}
+  .entryflow .st{display:flex;gap:9px;align-items:flex-start}
+  .entryflow .st .n{flex:none;width:22px;height:22px;border-radius:50%;background:var(--blue-50);color:var(--blue);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-top:2px}
+  .entryflow .st b{font-size:13px;font-weight:600;display:block;line-height:1.4}
+  .entryflow .st span{font-size:11.5px;color:var(--sub);display:block;line-height:1.5}
+  .entryflow .ar{color:#C3C8CF;font-size:16px}
+  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(12px);background:var(--ink);color:#fff;font-size:12.5px;padding:9px 16px;border-radius:20px;opacity:0;pointer-events:none;transition:.22s ease;z-index:99}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  @media(max-width:760px){
+    .entryflow{grid-template-columns:1fr;gap:8px}
+    .entryflow .ar{display:none}
+  }
+
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .dev{padding:10px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+  .dev:last-child{border-bottom:none}
+  .dev .l{display:flex;align-items:center;gap:8px;font-size:13px}
+  .dev .ip{font-size:11px;color:var(--sub)}
+  .tag{font-size:10px;padding:2px 6px;border-radius:4px;background:#EEF4FB;color:var(--blue)}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:var(--green)}
+  .dot.amber{background:var(--amber)}
+
+  .rec{padding:7px 0;border-top:1px solid var(--line);display:flex;justify-content:space-between;font-size:12px}
+  .rec:first-of-type{border-top:none}
+  .rec .ok{color:var(--green)}
+  .muted{color:var(--sub);font-size:11px}
+
+  /* 二维码 */
+  .qr{display:grid;grid-template-columns:repeat(9,1fr);grid-template-rows:repeat(9,1fr);gap:2px;width:104px;height:104px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:6px}
+  .qr i{display:block}
+  .qr i.on{background:var(--ink)}
+
+  /* PC 窗口 */
+  .pcwin{width:100%;background:#fff;border:1px solid #CFD4DA;border-radius:8px;overflow:hidden}
+  .pc-title{background:#F3F4F6;padding:8px 12px;font-size:12px;display:flex;justify-content:space-between;border-bottom:1px solid var(--line)}
+  .pc-btns span{display:inline-block;width:10px;height:10px;border-radius:50%;background:#D5D8DC;margin-left:6px}
+  .pc-info{padding:10px 14px;border-bottom:1px solid var(--line);font-size:12px;display:flex;gap:14px;align-items:center}
+  .pc-body{display:grid;grid-template-columns:1fr 1fr;min-height:210px}
+  .pc-col{padding:12px 14px}
+  .pc-col + .pc-col{border-left:1px solid var(--line)}
+  .pc-add{width:100%;border:1px dashed var(--blue);color:var(--blue);background:#F7FAFE;border-radius:8px;padding:9px;font-size:12px;margin-bottom:12px}
+  .pc-actions{display:flex;gap:8px;margin-bottom:12px}
+  .pc-actions .pc-add{margin-bottom:0;text-align:center;padding:9px 6px}
+  .pc-add.solid{border-style:solid;background:var(--blue);color:#fff;border-color:var(--blue)}
+  .pc-progress{padding:10px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--sub)}
+  .bar{height:6px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:6px}
+  .bar>i{display:block;height:100%;background:var(--blue)}
+
+  .segment{display:flex;gap:6px;margin-bottom:10px}
+  .segment span{padding:5px 12px;border-radius:8px;font-size:12px}
+  .segment .on{background:var(--blue);color:#fff}
+  .segment .off{background:#fff;color:var(--sub);border:1px solid var(--line)}
+
+  .pin{font-family:ui-monospace,Consolas,monospace;font-size:20px;letter-spacing:2px}
+  .addr{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--blue);word-break:break-all}
+  .gbtn{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .gbtn .b{background:var(--blue);color:#fff;font-size:12px;padding:5px 14px;border-radius:8px}
+
+  /* 访客状态切换 */
+  .tabs{display:flex;gap:6px;padding:12px 16px;border-bottom:1px solid var(--line);background:#fff;flex-wrap:wrap}
+  .tabs button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;color:var(--sub)}
+  .tabs button.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .gstate{display:none}
+  .gstate.on{display:block}
+
+  .browser{width:340px;max-width:100%;border:1px solid #CFD4DA;border-radius:12px;overflow:hidden;background:#fff;margin:0 auto}
+  .browser-bar{background:#F3F4F6;padding:8px 12px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line)}
+  .browser-bar .url{flex:1;background:#fff;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--sub);font-family:ui-monospace,monospace}
+  .browser-dots span{display:inline-block;width:9px;height:9px;border-radius:50%;background:#D5D8DC;margin-right:5px}
+
+  .join{max-width:300px;margin:0 auto}
+  .field{margin-bottom:12px}
+  .field label{display:block;font-size:12px;margin-bottom:4px}
+  .field input{width:100%;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:13px;font-family:inherit;background:#fff}
+  .field input.focus{border-color:var(--blue)}
+  .btn{width:100%;border-radius:8px;padding:11px;text-align:center;font-size:14px;font-weight:500;border:none;cursor:pointer}
+  .btn.primary{background:var(--blue);color:#fff}
+  .btn.green{background:var(--green);color:#fff}
+  .btn.red{background:var(--red);color:#fff}
+  .btn.ghost{background:#fff;border:1px solid var(--line);color:var(--ink)}
+
+  .flow-step{display:flex;gap:12px;align-items:flex-start;margin-bottom:14px}
+  .flow-step .n{flex:none;width:24px;height:24px;border-radius:50%;background:var(--blue-50);color:var(--blue);font-size:12px;display:flex;align-items:center;justify-content:center;font-weight:600}
+  .flow-step p{font-size:13px;color:var(--ink)}
+  .flow-step p span{color:var(--sub)}
+
+  .note{font-size:12px;color:var(--sub);margin-top:10px;padding:10px 12px;background:#fff;border:1px dashed var(--line);border-radius:8px}
+
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--sub);margin-top:14px}
+  .legend i{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:5px;vertical-align:middle}
+
+  @media(max-width:640px){
+    body{padding:16px 10px 60px}
+    header.top{padding:20px}
+    header.top h1{font-size:20px}
+    .pc-body{grid-template-columns:1fr}
+    .pc-col + .pc-col{border-left:none;border-top:1px solid var(--line)}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="top">
+    <h1>飞鸽 P2P · 完整界面与交互展示</h1>
+    <div class="sub">原有程序界面 + 新增「网页模式」设计，整合在一页。适用场景：熟人、面对面，同一 WiFi 或热点下扫码连入、当场传文件。</div>
+    <div class="chips">
+      <span class="chip">PC 端 C# / WinForms</span>
+      <span class="chip">Android 端 Kotlin / Compose</span>
+      <span class="chip g">浏览器 Guest 零安装</span>
+      <span class="chip a">IPv4 / IPv6 可切换</span>
+      <span class="chip g">群发 · 定向 · 上传</span>
+      <span class="chip">无文件池 · 无中转</span>
+    </div>
+  </header>
+
+  <!-- ============ 第一部分：原有程序自带界面 ============ -->
+  <section class="section">
+    <div class="section-title"><div class="num">1</div><h2>原有程序自带界面（保持不动）</h2></div>
+    <p class="section-desc">这是项目已有的功能与界面，新增设计完全沿用其视觉与心智：设备列表是核心、发送入口收敛到列表项、接收一律先确认。<b style="color:var(--ink)">网页模式的入口就在主界面上，与「＋ 添加设备」并列</b>——下面带蓝色角标的按钮可直接点，会跳到第二部分的真实页面。</p>
+
+    <!-- 入口动线 -->
+    <div class="entryflow">
+      <div class="st"><div class="n">1</div><div><b>打开飞鸽主界面</b><span>PC 窗口或 Android 首页，设备列表照旧</span></div></div>
+      <div class="ar">→</div>
+      <div class="st"><div class="n">2</div><div><b>点「🌐 网页模式」</b><span>与「＋ 添加设备」并列，是主界面唯一新增的控件</span></div></div>
+      <div class="ar">→</div>
+      <div class="st"><div class="n">3</div><div><b>进入网页模式页</b><span>启动服务 → 出地址 / 二维码 / PIN → 朋友扫码加入</span></div></div>
+    </div>
+
+    <div class="grid two">
+      <!-- PC 主窗口 -->
+      <div class="frame" id="pcMain">
+        <div class="frame-cap"><b>PC 端 · 主窗口</b><span>设备列表 + 传输日志 + 进度 · 新增入口已标出</span></div>
+        <div class="screen pad">
+          <div class="pcwin">
+            <div class="pc-title"><span>飞鸽 P2P · 局域网互传　协议 v2.1</span>
+              <span class="pc-btns"><span></span><span></span><span></span></span>
+            </div>
+            <div class="pc-info"><span>本机 <b>台式机-书房</b>（可点改）</span><span>192.168.1.10:2425</span><span style="color:var(--green)">● 在线</span></div>
+            <div class="pc-body">
+              <div class="pc-col">
+                <div class="pc-actions">
+                  <div class="pc-add">＋ 扫码添加设备</div>
+                  <div class="pc-add solid tap on-pc" data-target="hostPc">🌐 网页模式</div>
+                </div>
+                <div style="font-size:12px;color:var(--sub);margin-bottom:6px">设备</div>
+                <div class="dev"><div class="l"><span class="dot"></span>笔记本-客厅 <span class="muted">192.168.1.22</span></div></div>
+                <div class="dev"><div class="l"><span class="dot"></span>iPhone-小美 <span class="tag">刚配对</span></div></div>
+                <div class="muted" style="margin-top:10px">右键设备 → 发送文件… / 复制 IP / 移除</div>
+                <div class="muted" style="margin-top:6px">同网段自动出现；跨网段点上方扫码</div>
+                <div class="muted" style="margin-top:6px;color:var(--blue)">「🌐 网页模式」给没装 App 的朋友：点它 → 启动服务 → 出示地址与 PIN</div>
+              </div>
+              <div class="pc-col">
+                <div style="font-size:12px;color:var(--sub);margin-bottom:8px">传输日志</div>
+                <div class="rec"><span>09:41 配对成功，iPhone-小美 入列</span></div>
+                <div class="rec"><span style="color:var(--green)">09:42 ✓ 发送 合同.pdf 完成</span></div>
+                <div class="rec"><span style="color:var(--red)">09:43 ✗ 收到 临时.txt 已拒绝</span></div>
+                <div class="rec"><span>09:44 收到 photo.jpg，等待确认</span></div>
+              </div>
+            </div>
+            <div class="pc-progress">发送 photo.zip　154 / 248 MB　62%<div class="bar"><i style="width:62%"></i></div></div>
+          </div>
+          <div class="note">收文件：弹确认框显示文件名/大小/来源IP → 点「接收…」弹保存位置 → 选好才开始传；拒绝立即通知对方；60 秒不操作自动拒绝。</div>
+        </div>
+      </div>
+
+      <!-- Android 主界面 -->
+      <div class="frame" id="androidMain">
+        <div class="frame-cap"><b>Android 端 · 主界面</b><span>竖屏单列 + 前台接收服务 · 新增入口已标出</span></div>
+        <div class="screen pad">
+          <div class="phone">
+            <div class="statusbar"><span>9:41</span><span>●●● ▰</span></div>
+            <div class="appbar"><span class="t">飞鸽</span><span class="a">日志　设置</span></div>
+            <div class="local">本机 <b>[设备名]</b> · IPv6/IPv4　<span style="color:var(--green)">● 接收中</span></div>
+            <div class="entry">
+              <div class="entry-btn">＋ 添加设备</div>
+              <div class="entry-btn new tap" data-target="hostPhone">🌐 网页模式（新）</div>
+            </div>
+            <div class="pad" style="padding-top:0">
+              <div class="row-title">在线设备 <span class="count">2 台</span></div>
+              <div class="card">
+                <div class="dev"><div class="l"><span class="dot"></span>PC 台式机-书房</div><span class="ip">2409:…::2</span></div>
+                <div class="dev"><div class="l"><span class="dot"></span>手机 iPhone-小美 <span class="tag">刚配对</span></div></div>
+              </div>
+              <div class="muted" style="margin-top:8px">长按设备 → 发送文件…</div>
+              <div class="row-title" style="margin-top:16px">最近传输</div>
+              <div class="card">
+                <div class="rec"><span>收到 合同.pdf</span><span class="ok">完成</span></div>
+                <div class="rec"><span>发送 photo.jpg</span><span class="ok">完成</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="note">前台服务常驻通知：退后台/锁屏仍可收文件；收到文件时前台弹框、后台高优先级通知（接收/拒绝），同意后存到公共 Download/飞鸽收件/。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 配对页 + 接收确认 -->
+    <div class="grid two" style="margin-top:22px">
+      <div class="frame">
+        <div class="frame-cap"><b>Android 端 · 二维码配对页</b><span>跨网段 / AP 隔离兜底</span></div>
+        <div class="screen pad">
+          <div class="phone">
+            <div class="statusbar"><span>9:41</span><span>●●● ▰</span></div>
+            <div class="appbar"><span class="t">‹ 添加设备</span><span class="a"></span></div>
+            <div class="segment" style="padding:14px 16px 0"><span class="on">出示二维码</span><span class="off">扫码配对</span></div>
+            <div class="pad" style="text-align:center">
+              <div class="muted" style="margin-bottom:12px">让另一台飞鸽设备扫此码</div>
+              <div class="qr" style="margin:0 auto 12px"></div>
+              <div style="font-size:12px">剩余 <b>09:42</b>　<span style="color:var(--blue)">刷新二维码</span></div>
+              <div class="addr" style="margin-top:8px">2409:8a55::5:2425</div>
+              <div class="note" style="text-align:left">token 10 分钟有效、一次性、收起即失效；扫码方与出示方各自确认后，对方入设备列表。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-cap"><b>原有 · 接收确认框</b><span>网页上传将复用这一套</span></div>
+        <div class="screen pad">
+          <div class="card" style="max-width:300px;margin:24px auto">
+            <div style="font-size:15px;font-weight:600;margin-bottom:10px">收到文件</div>
+            <div class="rec" style="border:none"><span>文件名</span><span>photo.jpg</span></div>
+            <div class="rec"><span>大小</span><span>2.4 MB</span></div>
+            <div class="rec"><span>来源</span><span>192.168.1.22</span></div>
+            <div style="display:flex;gap:8px;margin-top:16px">
+              <button class="btn ghost" style="flex:1">拒绝</button>
+              <button class="btn green" style="flex:1">接收…</button>
+            </div>
+            <div class="muted" style="text-align:center;margin-top:8px">60 秒内未选择将自动拒绝</div>
+          </div>
+          <div class="note">PC 点「接收…」→ 弹保存位置对话框，选好才开始；Android 点「接收」→ 自动存默认目录。这套确认框与落盘逻辑原样用于网页上传。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 第二部分：新增网页模式 ============ -->
+  <section class="section">
+    <div class="section-title"><div class="num">2</div><h2>新增 · 网页模式（Host 端）</h2></div>
+    <p class="section-desc">从主界面点「🌐 网页模式」进入（见第 1 部分标蓝的入口）。这是独立页面：地址族可切换、群发有入口、无文件池。二维码渲染复用原有 QrUtils。</p>
+
+    <div class="grid two">
+      <div class="frame" id="hostPhone">
+        <div class="frame-cap"><b>Host 手机 · 网页模式页</b><span>从主界面「🌐 网页模式」进入 · 地址族 / PIN / 访客 / 群发</span></div>
+        <div class="screen pad">
+          <div class="phone">
+            <div class="statusbar"><span>9:41</span><span>●●● ▰</span></div>
+            <div class="appbar"><span class="t">‹ 网页模式</span><span class="a" style="color:var(--red)">停止服务</span></div>
+            <div class="pad" style="padding-top:12px">
+              <div class="card" style="margin-bottom:12px">
+                <div class="segment" id="hostSeg">
+                  <span class="on" data-fam="v4">IPv4</span>
+                  <span class="off" data-fam="v6">IPv6</span>
+                </div>
+                <div style="display:flex;gap:12px;align-items:center">
+                  <div class="qr" id="hostQr"></div>
+                  <div style="flex:1;min-width:0">
+                    <div class="addr" id="hostAddr">http://192.168.1.7:8080</div>
+                    <div class="muted" style="margin-top:10px">访问 PIN</div>
+                    <div class="pin">482913</div>
+                    <div style="font-size:12px;color:var(--blue);margin-top:4px">刷新 PIN</div>
+                  </div>
+                </div>
+                <div class="muted" style="margin-top:10px">让朋友用浏览器扫 · 切换地址族只影响新扫码者</div>
+              </div>
+
+              <div class="gbtn"><div style="font-size:13px;font-weight:500">在线访客 <span class="count" style="font-size:12px;color:var(--sub);font-weight:400">2 人</span></div><div class="b">群发</div></div>
+              <div class="card" style="margin-bottom:10px">
+                <div class="dev"><div class="l"><span class="dot"></span>🌐 小美</div><span class="ip">空闲</span></div>
+                <div class="dev"><div class="l"><span class="dot amber"></span>🌐 阿强</div><span style="font-size:12px;color:var(--amber)">接收中 62%</span></div>
+              </div>
+              <div class="muted" style="padding:0 2px 12px">长按 → 单人发送　·　点「群发」→ 多选发送</div>
+
+              <div style="font-size:13px;font-weight:500;margin-bottom:8px">传输状态</div>
+              <div class="card">
+                <div style="display:flex;justify-content:space-between;font-size:12px"><span>发送 photo.zip 给 阿强</span><span style="color:var(--blue)">62%</span></div>
+                <div class="bar"><i style="width:62%"></i></div>
+                <div class="muted" style="margin-top:8px">群发可展开：已接收 2 · 拒绝 1 · 传输中 1</div>
+              </div>
+            </div>
+          </div>
+          <div class="note">点上方 IPv4 / IPv6 可看地址与二维码联动变化：IPv6 地址加方括号。PIN 和在线访客不受切换影响。</div>
+        </div>
+      </div>
+
+      <div class="frame" id="hostPc">
+        <div class="frame-cap"><b>Host PC · 网页模式面板</b><span>从主窗口「🌐 网页模式」进入 · 同构设计，群改为复选框</span></div>
+        <div class="screen pad">
+          <div class="pcwin">
+            <div class="pc-title"><span>网页模式</span><span class="pc-btns"><span></span><span></span><span></span></span></div>
+            <div class="pc-info" style="justify-content:space-between">
+              <span>服务运行中 ●</span><span style="color:var(--red)">停止服务</span>
+            </div>
+            <div class="pc-body" style="grid-template-columns:1fr 1.2fr">
+              <div class="pc-col">
+                <div class="segment"><span class="on">IPv4</span><span class="off">IPv6</span></div>
+                <div class="qr" style="margin:0 0 10px 0"></div>
+                <div class="addr">http://192.168.1.7:8080</div>
+                <div class="muted" style="margin-top:8px">PIN <b style="font-size:16px;color:var(--ink);letter-spacing:1px">482913</b></div>
+              </div>
+              <div class="pc-col">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                  <span style="font-size:13px;font-weight:500">在线访客 2</span>
+                  <span style="background:var(--blue);color:#fff;font-size:12px;padding:4px 12px;border-radius:8px">群发</span>
+                </div>
+                <div class="dev"><label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox"> 🌐 小美</label></div>
+                <div class="dev"><label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox"> 🌐 阿强</label></div>
+                <div class="muted" style="margin-top:10px">勾选多人 → 发送文件… → 逐人 offer</div>
+              </div>
+            </div>
+            <div class="pc-progress">上传 / 群发进度条 + 状态文字<div class="bar"><i style="width:40%"></i></div></div>
+          </div>
+          <div class="note">PC 与手机同构：地址族切换、二维码、PIN、访客列表、群发多选一致；仅布局按桌面窗口调整。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 群发多选 -->
+    <div class="grid two" style="margin-top:22px">
+      <div class="frame">
+        <div class="frame-cap"><b>群发 · 多选模式</b><span>决策4：需要群发入口</span></div>
+        <div class="screen pad">
+          <div class="phone">
+            <div class="statusbar"><span>9:41</span><span>●●● ▰</span></div>
+            <div class="appbar"><span class="t">‹ 取消</span><span class="a" style="color:var(--blue)">全选</span></div>
+            <div class="pad">
+              <div class="card">
+                <div class="dev"><label style="display:flex;gap:10px;align-items:center;font-size:13px"><input type="checkbox" checked> 🌐 小美</label></div>
+                <div class="dev"><label style="display:flex;gap:10px;align-items:center;font-size:13px"><input type="checkbox" checked> 🌐 阿强</label></div>
+                <div class="dev"><label style="display:flex;gap:10px;align-items:center;font-size:13px"><input type="checkbox"> 🌐 阿明</label></div>
+              </div>
+              <div class="muted" style="margin:12px 0">默认全不选，防误发</div>
+              <div style="font-size:13px;font-weight:500;margin-bottom:8px">已选 2 人</div>
+              <button class="btn primary">发送文件…</button>
+              <div class="note">选 N 人 + 选 M 个文件 → 给每人逐个发 offer、各自 60 秒确认、独立传输；一人拒绝不影响他人。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-cap"><b>两个二维码的共存</b><span>与原 UI 结合：入口并列、组件共用</span></div>
+        <div class="screen pad">
+          <div class="flow-step"><div class="n">A</div><p><b>入口并列</b><br><span>「＋ 添加设备」给装 App 的设备；「🌐 网页模式」给浏览器。原配对流程一行不改。</span></p></div>
+          <div class="flow-step"><div class="n">B</div><p><b>组件共用 QrDisplay</b><br><span>二维码 + 载荷文字 + 复制 + 生命周期两处共用，只换标题与说明文案。</span></p></div>
+          <div class="flow-step"><div class="n">C</div><p><b>载荷不同</b><br><span>配对码 = FG_QR 串（10 分钟一次性、IPv6 优先）；网页码 = http://ip:port（PIN 常驻、可切地址族）。</span></p></div>
+          <div class="flow-step"><div class="n">D</div><p><b>防扫错</b><br><span>两页图标/色带不同，二维码下方固定一行小字说明扫码方类型。</span></p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 第三部分：访客浏览器四态（可交互） ============ -->
+  <section class="section">
+    <div class="section-title"><div class="num">3</div><h2>新增 · 浏览器访客端（可点切换体验四态）</h2></div>
+    <p class="section-desc">朋友零安装，扫码或手输地址打开。下面四个状态可点击切换；昵称在加入时填一次、之后只读（不可改名）。</p>
+
+    <div class="frame">
+      <div class="frame-cap"><b>Guest 浏览器页面</b><span>点击顶部标签切换状态</span></div>
+      <div class="tabs" id="guestTabs">
+        <button class="on" data-s="join">① 加入页</button>
+        <button data-s="idle">② 等待页</button>
+        <button data-s="offer">③ 收到文件确认</button>
+        <button data-s="transfer">④ 传输中</button>
+      </div>
+      <div class="screen pad" style="padding:20px">
+        <div class="browser">
+          <div class="browser-bar">
+            <span class="browser-dots"><span></span><span></span><span></span></span>
+            <span class="url">http://192.168.1.7:8080</span>
+          </div>
+
+          <!-- 状态① 加入 -->
+          <div class="gstate on" data-s="join">
+            <div class="pad" style="padding:24px 20px">
+              <div class="join">
+                <div style="text-align:center;font-size:18px;font-weight:600;margin-bottom:2px">飞鸽 · 网页传文件</div>
+                <div class="muted" style="text-align:center;margin-bottom:22px">无需安装 · 安全连接</div>
+                <div class="field"><label>你的昵称</label><input value="小美" readonly style="background:#FAFAFA;color:var(--sub)"></div>
+                <div class="field"><label>访问 PIN</label><input class="focus" value="482913" style="font-family:ui-monospace,monospace;letter-spacing:2px"></div>
+                <div class="btn primary" style="margin-top:6px">进入</div>
+                <div class="muted" style="text-align:center;margin-top:10px">昵称加入时填一次，之后不可修改</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 状态② 等待 -->
+          <div class="gstate" data-s="idle">
+            <div class="pad" style="padding:22px 20px">
+              <div style="font-size:15px;font-weight:600">已连接 · <span id="guestNick">小美</span></div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--green);margin:6px 0 20px"><span class="dot"></span>等待主机发送文件</div>
+              <div style="border:1px dashed var(--blue);border-radius:8px;padding:18px;text-align:center;color:var(--blue);font-size:14px;margin-bottom:6px">↑ 上传文件</div>
+              <div class="muted" style="margin-bottom:20px;margin-top:6px">点击选择要发给主机的文件</div>
+              <div style="font-size:13px;font-weight:500;margin-bottom:8px">最近传输</div>
+              <div class="rec"><span>↑ 我上传 合同.pdf</span><span class="ok">完成</span></div>
+              <div class="note">上传走两阶段：先发 offer → 主机弹确认框 → 同意后才真正传；PC 主机会让你看到它选的保存位置逻辑，安卓主机自动存默认目录。</div>
+            </div>
+          </div>
+
+          <!-- 状态③ 确认 -->
+          <div class="gstate" data-s="offer">
+            <div class="pad" style="padding:22px 20px">
+              <div class="card">
+                <div class="muted" style="margin-bottom:6px">主机 发来文件</div>
+                <div style="font-size:16px;font-weight:600">photo.zip</div>
+                <div class="muted" style="margin-bottom:16px">248 MB</div>
+                <div style="display:flex;gap:8px">
+                  <button class="btn red" style="flex:1">拒绝</button>
+                  <button class="btn green" style="flex:1" id="acceptBtn">接收</button>
+                </div>
+                <div style="font-size:12px;color:var(--amber);text-align:center;margin-top:10px" id="countdown">剩余 00:58</div>
+              </div>
+              <div class="muted" style="margin-top:12px;text-align:center">确认窗口 60 秒，超时按拒绝处理并通知主机</div>
+            </div>
+          </div>
+
+          <!-- 状态④ 传输 -->
+          <div class="gstate" data-s="transfer">
+            <div class="pad" style="padding:22px 20px">
+              <div style="font-size:15px;font-weight:600;margin-bottom:14px">正在接收</div>
+              <div style="font-size:14px;margin-bottom:4px">photo.zip</div>
+              <div class="bar"><i style="width:62%"></i></div>
+              <div style="display:flex;justify-content:space-between;font-size:12px;margin-top:8px;color:var(--sub)"><span>154 / 248 MB</span><span>62%</span></div>
+              <div class="note" style="margin-top:18px">传完自动落盘到本机下载目录（浏览器 a.download / File System Access API）。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 第四部分：关键流程 ============ -->
+  <section class="section">
+    <div class="section-title"><div class="num">4</div><h2>关键交互流程与决策</h2></div>
+    <p class="section-desc">所有流程都建立在"熟人面对面"前提上：不踢人、无文件池、仅浅色、默认简单。</p>
+    <div class="grid two">
+      <div class="frame">
+        <div class="frame-cap"><b>三条主流程</b><span>加入 → 收发 → 群发</span></div>
+        <div class="screen pad">
+          <div class="flow-step"><div class="n">1</div><p><b>开服务 → 加入</b><br><span>主界面点「🌐 网页模式」→ 服务启动、生成地址与 PIN → 朋友扫码/输地址打开 → 填昵称+PIN → 进入等待页，Host 访客列表出现。</span></p></div>
+          <div class="flow-step"><div class="n">2</div><p><b>定向发 / 上传</b><br><span>Host 长按访客发文件 → 访客确认卡接收；访客上传 → Host 复用原确认框 → 按平台落盘（PC 选位置 / 安卓默认）。</span></p></div>
+          <div class="flow-step"><div class="n">3</div><p><b>群发</b><br><span>Host 点群发 → 勾选多人 + 选文件 → 逐人 offer、各自确认、独立传输，互不影响。</span></p></div>
+          <div class="flow-step"><div class="n">4</div><p><b>地址族切换</b><br><span>点 IPv4/IPv6 → 地址与二维码联动更新；PIN 不变、在线访客不掉线，只影响新扫码者。</span></p></div>
+        </div>
+      </div>
+      <div class="frame">
+        <div class="frame-cap"><b>9 项已确认决策</b><span>本设计稿定稿依据</span></div>
+        <div class="screen pad">
+          <div class="legend" style="display:block;line-height:2">
+            <div><i style="background:var(--blue)"></i>1 不踢人：刷新 PIN 不影响在线访客</div>
+            <div><i style="background:var(--blue)"></i>2 不要文件池、无中转：上传直接落盘（PC 选位置 / 安卓默认）</div>
+            <div><i style="background:var(--blue)"></i>3 访客不改名字：加入时填一次，之后只读</div>
+            <div><i style="background:var(--green)"></i>4 需要群发入口：多选访客逐人发送</div>
+            <div><i style="background:var(--blue)"></i>5 仅浅色，不做深色切换</div>
+            <div><i style="background:var(--blue)"></i>6 默认端口 8080，占用时提示改</div>
+            <div><i style="background:var(--blue)"></i>7 网页面默认 IPv4，配对码维持 IPv6 优先</div>
+            <div><i style="background:var(--blue)"></i>8 地址族切换不联动已连接访客</div>
+            <div><i style="background:var(--blue)"></i>9 配对码不加地址族切换（保护已测流程）</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div style="text-align:center;color:var(--sub);font-size:12px;margin-top:40px">
+    飞鸽 P2P · 网页模式交互设计稿　|　详细规范见 shared/WEB_MODE_UX.md　|　状态：设计定稿，待编码
+  </div>
+
+</div>
+
+<script>
+  // ---- 二维码图案生成（确定性伪码，仅作视觉示意）----
+  function paintQr(el, seed){
+    if(!el) return;
+    el.innerHTML='';
+    const N=9;
+    for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+      const i=document.createElement('i');
+      const finder=(x<3&&y<3)||(x>N-4&&y<3)||(x<3&&y>N-4);
+      const on = finder ? ((x===0||x===2||y===0||y===2||(x===1&&y===1)) || (x>=N-3&&(x===N-3||x===N-1||y===0||y===2)) || (y>=N-3&&(y===N-3||y===N-1||x===0||x===2)))
+        : (((x*7+y*13+seed*5)%3)!==0);
+      if(on) i.className='on';
+      el.appendChild(i);
+    }
+  }
+  document.querySelectorAll('.qr').forEach((q,idx)=>paintQr(q,idx+1));
+
+  // ---- Host 地址族切换 ----
+  const addrV4='http://192.168.1.7:8080';
+  const addrV6='http://[2409:8a55::5]:8080';
+  document.querySelectorAll('#hostSeg span').forEach(sp=>{
+    sp.addEventListener('click',()=>{
+      document.querySelectorAll('#hostSeg span').forEach(s=>{s.classList.remove('on');s.classList.add('off')});
+      sp.classList.remove('off');sp.classList.add('on');
+      const v6=sp.dataset.fam==='v6';
+      const addr=document.getElementById('hostAddr');
+      if(addr) addr.textContent=v6?addrV6:addrV4;
+      paintQr(document.getElementById('hostQr'), v6?9:4);
+    });
+  });
+
+  // ---- 访客四态切换 ----
+  const tabs=document.querySelectorAll('#guestTabs button');
+  const states=document.querySelectorAll('.gstate');
+  let countdownTimer=null;
+  function showState(name){
+    tabs.forEach(t=>t.classList.toggle('on',t.dataset.s===name));
+    states.forEach(s=>s.classList.toggle('on',s.dataset.s===name));
+    if(countdownTimer){clearInterval(countdownTimer);countdownTimer=null;}
+    if(name==='offer'){
+      let left=58;
+      const cd=document.getElementById('countdown');
+      countdownTimer=setInterval(()=>{
+        left--;if(left<0){clearInterval(countdownTimer);return;}
+        const m=String(Math.floor(left/60)).padStart(2,'0');
+        const s=String(left%60).padStart(2,'0');
+        if(cd) cd.textContent='剩余 00:'+s+(left<15?' 即将超时':'');
+        if(cd && left<15) cd.style.color='var(--red)';
+      },1000);
+    }
+  }
+  tabs.forEach(t=>t.addEventListener('click',()=>showState(t.dataset.s)));
+  const accept=document.getElementById('acceptBtn');
+  if(accept) accept.addEventListener('click',()=>showState('transfer'));
+
+  // ---- 加入页：点进入 → 等待页 ----
+  const joinBtn=document.querySelector('.gstate[data-s="join"] .btn.primary');
+  if(joinBtn) joinBtn.addEventListener('click',()=>showState('idle'));
+
+  // ---- 主界面入口 → 跳转到网页模式页并高亮 ----
+  const toastEl=document.createElement('div');
+  toastEl.className='toast';
+  document.body.appendChild(toastEl);
+  let toastTimer=null;
+  function toast(msg){
+    toastEl.textContent=msg;
+    toastEl.classList.add('show');
+    if(toastTimer) clearTimeout(toastTimer);
+    toastTimer=setTimeout(()=>toastEl.classList.remove('show'),1800);
+  }
+  document.querySelectorAll('[data-target]').forEach(el=>{
+    el.addEventListener('click',()=>{
+      const t=document.getElementById(el.dataset.target);
+      if(!t) return;
+      toast(el.dataset.target==='hostPhone'
+        ? '已进入「网页模式」页 · 手机端：服务已启动，出地址与 PIN'
+        : '已进入「网页模式」面板 · PC 端：服务已启动，出地址与 PIN');
+      t.scrollIntoView({behavior:'smooth',block:'center'});
+      t.classList.remove('flash');
+      void t.offsetWidth;
+      t.classList.add('flash');
+      setTimeout(()=>t.classList.remove('flash'),1600);
+    });
+  });
+</script>
+</body>
+</html>

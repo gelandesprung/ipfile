@@ -10,5 +10,7 @@
     <Compile Include="../../pc/Models.cs" Link="Models.cs" />
     <Compile Include="../../pc/TransferService.cs" Link="TransferService.cs" />
     <Compile Include="../../pc/DiscoveryService.cs" Link="DiscoveryService.cs" />
+    <Compile Include="../../pc/WebHostService.cs" Link="WebHostService.cs" />
+    <Compile Include="../../pc/GuestPage.cs" Link="GuestPage.cs" />
   </ItemGroup>
 </Project>

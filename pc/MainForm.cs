@@ -33,6 +33,7 @@ public sealed class MainForm : Form
 
     // 配对入口与展开面板（默认收起，只有点击入口才显示二维码）
     private readonly Button _addDeviceBtn = new();
+    private readonly Button _webBtn = new();
     private readonly Panel _pairPanel = new();
     private readonly PictureBox _qrBox = new();
     private readonly Label _expiryLabel = new();
@@ -61,6 +62,10 @@ public sealed class MainForm : Form
     private DateTime _lastLogTime = DateTime.MinValue;
     private string _lastDiag = "";
     private DateTime _lastDiagTime = DateTime.MinValue;
+
+    /// <summary>网页模式服务（懒启动）：窗口关了服务继续跑，程序退出才释放。</summary>
+    private WebHostService? _web;
+    private WebModeForm? _webForm;
 
     public MainForm()
     {
@@ -365,7 +370,7 @@ public sealed class MainForm : Form
         return left;
     }
 
-    /// <summary>默认态唯一的配对入口：整行只有一个按钮。</summary>
+    /// <summary>默认态的两个并列入口：装 App 的走扫码配对，浏览器访客走网页模式。</summary>
     private Control BuildPairEntry()
     {
         var host = new Panel
@@ -373,6 +378,15 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill, BackColor = Color.White,
             Padding = new Padding(14, 0, 14, 6)
         };
+
+        var row = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
+            Margin = Padding.Empty, Padding = Padding.Empty, BackColor = Color.White
+        };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+        row.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
         _addDeviceBtn.Text = "＋   扫码添加设备";
         _addDeviceBtn.Dock = DockStyle.Fill;
@@ -385,9 +399,25 @@ public sealed class MainForm : Form
         _addDeviceBtn.TextAlign = ContentAlignment.MiddleLeft;
         _addDeviceBtn.Padding = new Padding(10, 0, 0, 0);
         _addDeviceBtn.Cursor = Cursors.Hand;
+        _addDeviceBtn.Margin = new Padding(0, 0, 4, 0);
         _tip.SetToolTip(_addDeviceBtn, "出示二维码，让对方扫码添加这台设备");
 
-        host.Controls.Add(_addDeviceBtn);
+        // 实心蓝：与「添加设备」并列，但一眼看出这是新增的、且是给没装 App 的人的入口
+        _webBtn.Text = "🌐  网页模式";
+        _webBtn.Dock = DockStyle.Fill;
+        _webBtn.FlatStyle = FlatStyle.Flat;
+        _webBtn.FlatAppearance.BorderSize = 0;
+        _webBtn.BackColor = Color.FromArgb(30, 111, 217);
+        _webBtn.ForeColor = Color.White;
+        _webBtn.Font = new Font("微软雅黑", 9.5F);
+        _webBtn.TextAlign = ContentAlignment.MiddleCenter;
+        _webBtn.Cursor = Cursors.Hand;
+        _webBtn.Margin = new Padding(4, 0, 0, 0);
+        _tip.SetToolTip(_webBtn, "让朋友用浏览器连进来收/发文件，不用装 App");
+
+        row.Controls.Add(_addDeviceBtn, 0, 0);
+        row.Controls.Add(_webBtn, 1, 0);
+        host.Controls.Add(row);
         return host;
     }
 
@@ -671,6 +701,7 @@ public sealed class MainForm : Form
 
         // 配对入口：默认收起，点击才生成 token 并展开二维码
         _addDeviceBtn.Click += (_, _) => ExpandPairPanel();
+        _webBtn.Click += (_, _) => OpenWebMode();
         _collapseQr.Click += (_, _) => CollapsePairPanel();
         _refreshQr.Click += (_, _) => RefreshPairing();
         _pairTimer.Tick += (_, _) => UpdatePairCountdown();
@@ -726,6 +757,10 @@ public sealed class MainForm : Form
             _tray.Dispose();
             _pairTimer.Stop();
             _pairTimer.Dispose();
+            _webForm?.ForceClose();
+            _webForm = null;
+            _web?.Dispose();     // 停掉网页服务，浏览器访客全部断开
+            _web = null;
             _discovery.Dispose();   // 会先发一个 BYE，让对方立刻把本机从列表里摘掉
             _transfer.Dispose();
         };
@@ -1178,6 +1213,107 @@ public sealed class MainForm : Form
         }
     }
 
+    // ---------------- 网页模式（浏览器访客） ----------------
+
+    /// <summary>点「🌐 网页模式」= 进入独立页面，顺带把服务起起来（复用「点入口才启动」的哲学）。</summary>
+    private void OpenWebMode()
+    {
+        EnsureWebService();
+        StartWebService();
+
+        if (_webForm == null || _webForm.IsDisposed)
+        {
+            _webForm = new WebModeForm(_web!, _config, UpdateWebEntry);
+            _webForm.FormClosed += (_, _) =>
+            {
+                _webForm = null;
+                UpdateWebEntry();
+            };
+        }
+
+        _webForm.Show();
+        if (_webForm.WindowState == FormWindowState.Minimized) _webForm.WindowState = FormWindowState.Normal;
+        _webForm.BringToFront();
+        _webForm.Activate();
+        UpdateWebEntry();
+    }
+
+    /// <summary>首次用到网页模式时才建服务并接线，没点过就不占端口、不占资源。</summary>
+    private void EnsureWebService()
+    {
+        if (_web != null) return;
+
+        _web = new WebHostService(_config);
+        _web.Log += msg => Ui(() => AppendLog(msg, Color.FromArgb(30, 100, 180)));
+        _web.Progress += (dir, name, peer, done, total) => Ui(() =>
+        {
+            var pct = total > 0 ? (int)(1000.0 * done / total) : 0;
+            if (!_progress.Visible) _progress.Visible = true;
+            _progress.Value = Math.Min(1000, Math.Max(0, pct));
+            _progressLabel.Text = $"{dir} {name} {peer}  {TransferService.FormatSize(done)}/{TransferService.FormatSize(total)}  {pct / 10}%";
+        });
+        _web.Finished += (dir, name, peer, size, ok, msg) => Ui(() =>
+        {
+            _progress.Visible = false;
+            if (ok)
+            {
+                AppendLog($"✓ {dir} {name}（{peer}）完成", Color.FromArgb(25, 140, 60));
+                _progressLabel.Text = $"{dir} {name} 完成 · {TransferService.FormatSize(size)}";
+                // 收到的 msg 就是落盘路径，与 P2P 接收同一套「最近传输」登记
+                if (dir == "收到" && msg.Length > 0) AddRecent(msg, name, size, true);
+            }
+            else
+            {
+                AppendLog($"✗ {dir} {name}（{peer}）失败：{msg}", Color.FromArgb(190, 40, 40));
+                _progressLabel.Text = $"{dir} {name} 失败";
+            }
+            UpdateWebEntry();
+        });
+
+        // 访客上传复用现有接收确认框：文件名/大小/来源 → 「接收…」→ 选保存位置 → 才开始收
+        _web.ConfirmUpload += ConfirmReceiveAsync;
+        _web.GuestsChanged += () => Ui(UpdateWebEntry);
+    }
+
+    private bool StartWebService()
+    {
+        if (_web == null) return false;
+        if (_web.Running) return true;
+
+        var (ok, msg) = _web.Start(_config.WebPort);
+        if (!ok)
+        {
+            AppendLog($"网页模式启动失败：{msg}", Color.FromArgb(190, 40, 40));
+            MessageBox.Show(this,
+                $"{msg}\n\n可以在网页模式窗口里点「改端口」换一个，或先关掉占用该端口的程序。",
+                "网页模式", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+
+        if (_web.Port != _config.WebPort)
+        {
+            _config.WebPort = _web.Port;
+            _config.Save();
+        }
+        AppendLog(msg, Color.FromArgb(25, 140, 60));
+        AppendLog("朋友连同一 WiFi / 热点，用浏览器打开该地址，输入 PIN 加入即可收发文件", Color.Gray);
+        AppendLog("若朋友打不开页面，请确认 Windows 防火墙已允许本程序访问「专用网络」", Color.Gray);
+        return true;
+    }
+
+    /// <summary>入口按钮始终显示服务与访客状态，关掉网页模式窗口后也能一眼看到还在跑。</summary>
+    private void UpdateWebEntry()
+    {
+        var running = _web?.Running == true;
+        var guests = running ? _web!.SnapshotGuests().Count : 0;
+        _webBtn.Text = running
+            ? (guests > 0 ? $"🌐  网页模式 · {guests} 人" : "🌐  网页模式 · 运行中")
+            : "🌐  网页模式";
+        _tip.SetToolTip(_webBtn, running
+            ? $"服务运行中 · 端口 {_web!.Port} · 在线访客 {guests} 人\n点击打开网页模式窗口"
+            : "让朋友用浏览器连进来收/发文件，不用装 App");
+    }
+
     private void BeginEditName()
     {
         _nameLabel.Visible = false;
@@ -1303,6 +1439,7 @@ public sealed class MainForm : Form
 
         var menu = new ContextMenuStrip { Font = new Font("微软雅黑", 9F) };
         menu.Items.Add(new ToolStripMenuItem("打开主界面", null, (_, _) => ShowFromTray()) { Font = new Font("微软雅黑", 9F, FontStyle.Bold) });
+        menu.Items.Add(new ToolStripMenuItem("网页模式…", null, (_, _) => OpenWebMode()));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("退出飞鸽 P2P", null, (_, _) => ExitApp()));
         _tray.ContextMenuStrip = menu;
