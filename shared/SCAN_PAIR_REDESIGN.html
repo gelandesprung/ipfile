@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>数据线 · 扫码配对界面改版设计</title>
+<style>
+  :root{
+    --blue:#1E6FD9; --blue-l:#4DA3FF; --green:#1E9E4A; --red:#C62828;
+    --amber:#B8860B; --ink:#1C2026; --gray:#888; --line:#E8EAED;
+    --bg:#F5F7FA; --card:#fff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI","Microsoft YaHei",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:40px 28px 64px}
+  header h1{font-size:26px;margin:0 0 8px;letter-spacing:-.2px}
+  header p{margin:0;color:#5b6470;font-size:13.5px;line-height:1.7}
+  .tag{display:inline-block;font-size:11px;color:var(--blue);background:#EAF2FE;
+    border:1px solid #D3E4FD;border-radius:999px;padding:2px 9px;margin-right:6px}
+  section{margin-top:44px}
+  h2{font-size:16px;margin:0 0 4px}
+  h2 .n{display:inline-flex;width:22px;height:22px;border-radius:7px;background:var(--blue);
+    color:#fff;font-size:12px;align-items:center;justify-content:center;margin-right:8px;vertical-align:2px}
+  .lead{font-size:13px;color:#5b6470;margin:6px 0 18px;line-height:1.7}
+
+  /* 问题清单 */
+  .issues{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .issue{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 16px 14px}
+  .issue b{display:block;font-size:13px;margin-bottom:6px}
+  .issue p{margin:0;font-size:12px;color:#6b7480;line-height:1.65}
+  .issue .bad{font-size:11px;color:var(--red);background:#FDEDED;border-radius:6px;
+    padding:2px 7px;display:inline-block;margin-bottom:8px}
+
+  /* 手机 */
+  .screens{display:flex;gap:34px;flex-wrap:wrap;align-items:flex-start}
+  .phone{width:320px;flex:0 0 auto}
+  .cap{font-size:12px;color:#6b7480;margin-top:12px;line-height:1.6}
+  .cap b{color:var(--ink);font-size:12.5px;display:block;margin-bottom:2px}
+  .frame{width:320px;height:660px;background:#fff;border-radius:34px;border:1px solid #DDE2E8;
+    box-shadow:0 10px 30px rgba(20,35,60,.10),0 1px 2px rgba(20,35,60,.06);
+    overflow:hidden;position:relative;display:flex;flex-direction:column}
+  .status{height:26px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 18px;font-size:10px;color:#8a929c;flex:0 0 auto}
+  .status .dots{letter-spacing:1px}
+
+  /* 顶部栏 + 分段 */
+  .appbar{height:48px;display:flex;align-items:center;padding:0 8px 0 12px;flex:0 0 auto}
+  .appbar .back{width:26px;height:26px;display:flex;align-items:center;justify-content:center;
+    color:var(--ink);font-size:17px}
+  .appbar .t{font-size:15px;font-weight:600;margin-left:8px}
+  .tabs{display:flex;height:40px;flex:0 0 auto;border-bottom:1px solid var(--line)}
+  .tab{flex:1;display:flex;align-items:center;justify-content:center;font-size:13px;color:#7b838d;position:relative}
+  .tab.on{color:var(--blue);font-weight:600}
+  .tab.on:after{content:"";position:absolute;left:50%;transform:translateX(-50%);bottom:-1px;
+    width:46px;height:2.5px;border-radius:2px;background:var(--blue)}
+
+  /* 出示二维码页 */
+  .qrbody{flex:1;display:flex;flex-direction:column;align-items:center;padding:20px 20px 0}
+  .hint{font-size:12px;color:#6b7480}
+  .qrcard{width:214px;height:214px;border-radius:16px;background:#fff;border:1px solid var(--line);
+    box-shadow:0 4px 14px rgba(20,35,60,.06);margin-top:14px;padding:12px}
+  .qrcard .fakeqr{width:100%;height:100%;border-radius:6px;
+    background:
+      repeating-linear-gradient(90deg,#1C2026 0 6px,transparent 6px 12px),
+      repeating-linear-gradient(0deg,#1C2026 0 6px,#fff 6px 12px);
+    background-blend-mode:multiply;opacity:.88;
+    -webkit-mask-image:radial-gradient(circle at 20% 20%,#000 60%,#000 60%);
+    position:relative}
+  .qrcard .fakeqr:after{content:"";position:absolute;inset:0;
+    background:
+      linear-gradient(#fff,#fff) 8px 8px/44px 44px no-repeat,
+      linear-gradient(#fff,#fff) calc(100% - 8px) 8px/44px 44px no-repeat,
+      linear-gradient(#fff,#fff) 8px calc(100% - 8px)/44px 44px no-repeat}
+  .count{font-size:15px;font-weight:700;color:var(--blue);margin-top:14px}
+  .addr{font-family:Consolas,monospace;font-size:10.5px;color:var(--gray);margin-top:4px}
+  .rowbtns{display:flex;gap:8px;margin-top:12px}
+  .btn-s{height:34px;padding:0 15px;border-radius:9px;border:1px solid var(--line);
+    background:#fff;font-size:12px;color:var(--ink);display:flex;align-items:center}
+  .btn-s.primary{border-color:var(--blue);color:var(--blue);font-weight:600}
+  .foot-hint{font-size:10.5px;color:var(--gray);margin-top:10px}
+
+  /* 相机区 */
+  .cambody{flex:1;display:flex;flex-direction:column;padding:14px 16px 0}
+  .cam{position:relative;width:100%;flex:1;border-radius:20px;overflow:hidden;
+    background:
+      radial-gradient(120% 80% at 20% 15%,#2b3644 0%,#151b23 45%,#0b0f14 100%);
+  }
+  /* 模拟真实场景的模糊色块 */
+  .cam .blob{position:absolute;border-radius:50%;filter:blur(22px);opacity:.5}
+  .cam .b1{width:150px;height:150px;background:#3d5a7a;left:-30px;top:40px}
+  .cam .b2{width:120px;height:120px;background:#6b5b45;right:-20px;bottom:60px}
+  .cam .b3{width:90px;height:90px;background:#2f6b57;right:60px;top:20px}
+  /* 暗化遮罩：中间挖空 */
+  .mask{position:absolute;inset:0;background:transparent;
+    box-shadow:0 0 0 2000px rgba(8,12,18,.55)}
+  .vf{position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);
+    width:196px;height:196px;border-radius:14px}
+  .corner{position:absolute;width:30px;height:30px;border:3.5px solid #F2F8FF;z-index:3;
+    filter:drop-shadow(0 0 4px rgba(120,190,255,.45))}
+  .corner.tl{left:0;top:0;border-right:0;border-bottom:0;border-radius:12px 0 0 0}
+  .corner.tr{right:0;top:0;border-left:0;border-bottom:0;border-radius:0 12px 0 0}
+  .corner.bl{left:0;bottom:0;border-right:0;border-top:0;border-radius:0 0 0 12px}
+  .corner.br{right:0;bottom:0;border-left:0;border-top:0;border-radius:0 0 12px 0}
+  .scanline{position:absolute;left:8px;right:8px;height:2px;top:24px;border-radius:2px;
+    background:linear-gradient(90deg,transparent,#4DA3FF,transparent);
+    box-shadow:0 0 12px 2px rgba(77,163,255,.55);animation:scan 2.4s ease-in-out infinite}
+  @keyframes scan{0%{transform:translateY(0)}50%{transform:translateY(148px)}100%{transform:translateY(0)}}
+  .sidetip{position:absolute;left:50%;transform:translateX(-50%);bottom:30px;color:#dfe8f3;
+    font-size:11px;letter-spacing:.3px;white-space:nowrap}
+  .torch{position:absolute;right:12px;top:12px;width:34px;height:34px;border-radius:50%;
+    background:rgba(15,20,28,.55);border:1px solid rgba(255,255,255,.18);color:#fff;
+    font-size:14px;display:flex;align-items:center;justify-content:center}
+  .camhint{text-align:center;margin-top:12px;font-size:12.5px;font-weight:600}
+  .camhint span{display:block;font-weight:400;font-size:11px;color:var(--gray);margin-top:3px}
+  .acts{display:flex;justify-content:center;gap:8px;margin-top:12px}
+  .act{height:38px;padding:0 13px;border-radius:11px;background:#F4F6F9;border:1px solid var(--line);
+    font-size:11.5px;display:flex;align-items:center;gap:5px;color:#3b434d}
+  .act.on{background:#EAF2FE;border-color:#CFE1FC;color:var(--blue);font-weight:600}
+  .note{font-size:10.5px;color:var(--gray);text-align:center;margin-top:10px;line-height:1.6;
+    padding-bottom:14px}
+
+  /* 底部确认卡 */
+  .sheet{position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:22px 22px 0 0;
+    box-shadow:0 -10px 30px rgba(10,18,30,.18);padding:10px 18px 18px;z-index:5}
+  .grab{width:38px;height:4px;border-radius:2px;background:#DDE2E8;margin:0 auto 14px}
+  .okrow{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .okicon{width:34px;height:34px;border-radius:50%;background:#E9F7EE;color:var(--green);
+    display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700}
+  .okrow .tt{font-size:15px;font-weight:700}
+  .okrow .ss{font-size:11px;color:var(--gray);margin-top:2px}
+  .dev{display:flex;align-items:center;justify-content:space-between;background:#F7F9FC;
+    border:1px solid #EDF1F6;border-radius:12px;padding:11px 13px;margin:12px 0}
+  .dev .nm{font-size:13.5px;font-weight:600}
+  .dev .ip{font-family:Consolas,monospace;font-size:10.5px;color:var(--gray);margin-top:3px}
+  .dev .av{width:34px;height:34px;border-radius:9px;background:#E4EDFB;color:var(--blue);
+    display:flex;align-items:center;justify-content:center;font-size:15px}
+  .expl{font-size:11px;color:#6b7480;line-height:1.65;margin:0 0 14px}
+  .btnbig{height:50px;border-radius:14px;background:var(--blue);color:#fff;font-size:14.5px;
+    font-weight:600;display:flex;align-items:center;justify-content:center;
+    box-shadow:0 6px 16px rgba(30,111,217,.25)}
+  .btngray{height:44px;display:flex;align-items:center;justify-content:center;color:#7b838d;
+    font-size:13px;margin-top:4px}
+
+  /* 状态小卡 */
+  .states{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .state{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px;min-height:150px;
+    display:flex;flex-direction:column}
+  .state .ic{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;
+    justify-content:center;font-size:16px;margin-bottom:10px}
+  .state b{font-size:12.5px;margin-bottom:5px}
+  .state p{margin:0;font-size:11.5px;color:#6b7480;line-height:1.6}
+  .state .act2{margin-top:auto;padding-top:10px;font-size:11.5px;color:var(--blue);font-weight:600}
+
+  /* 表格 */
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;font-size:12.5px}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top;line-height:1.6}
+  th{background:#FAFBFC;font-size:11.5px;color:#5b6470;font-weight:600}
+  tr:last-child td{border-bottom:0}
+  code{font-family:Consolas,monospace;font-size:11.5px;background:#F4F6F9;border-radius:4px;padding:1px 5px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px}
+  .panel h3{font-size:13px;margin:0 0 10px}
+  .kv{display:flex;gap:10px;font-size:12px;color:#5b6470;line-height:1.9}
+  .kv b{color:var(--ink);flex:0 0 84px;font-weight:600}
+  ul.tight{margin:8px 0 0;padding-left:18px;font-size:12px;color:#5b6470;line-height:1.85}
+  .callout{background:#F0F6FF;border:1px solid #D6E6FD;border-radius:12px;padding:14px 16px;
+    font-size:12.5px;color:#31527b;line-height:1.75}
+  .badge{display:inline-flex;width:17px;height:17px;border-radius:50%;background:#fff;color:var(--blue);
+    border:1.5px solid var(--blue);font-size:10px;align-items:center;justify-content:center;
+    font-weight:700;vertical-align:1px;margin-right:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div style="margin-bottom:10px">
+    <span class="tag">Android · 扫码配对</span>
+    <span class="tag">设计稿 v1</span>
+    <span class="tag">已实现 · v2.4</span>
+  </div>
+  <h1>扫码配对界面改版</h1>
+  <p>现状：点「扫码配对」后是一块 260dp 的深色方块，里面一个二维码图标，按「打开相机扫码」又跳到 ZXing 的全屏横屏扫描页。<br>
+  改版目标：<b>把相机放回页面里、保持竖屏、让取景框自己说明用法</b>，扫到码后不再突然弹窗，改成底部确认卡。</p>
+</header>
+
+<section>
+  <h2><span class="n">1</span>现在到底哪里别扭</h2>
+  <p class="lead">三个问题叠加，才让人看不懂那块黑框。改版要同时解决，只换皮没用。</p>
+  <div class="issues">
+    <div class="issue">
+      <span class="bad">黑框无意义</span>
+      <b>它只是个占位图，不是相机</b>
+      <p>深色 Box + 76dp 的 QrCodeScanner 图标，既不预览也不响应，看起来像"坏了"。真正的扫描发生在另一个 Activity 里。</p>
+    </div>
+    <div class="issue">
+      <span class="bad">横屏跳转</span>
+      <b>ZXing 默认锁横屏</b>
+      <p><code>ScanOptions.setOrientationLocked(false)</code> 仍沿用 CaptureActivity 的 sensorLandscape。竖屏 App 里突然横过来，还要单手举着扫。</p>
+    </div>
+    <div class="issue">
+      <span class="bad">交互断层</span>
+      <b>扫码 → 全屏 → 弹窗 → 回页</b>
+      <p>四次视觉切换，每次都要重新找焦点；扫错码只有一个 Toast，没有留在页面里的解释。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">2</span>三个关键画面</h2>
+  <p class="lead">左侧是改动很小的「出示二维码」页（保持对照），中间是全新的扫描页，右侧是扫码成功后的确认卡。</p>
+
+  <div class="screens">
+
+    <!-- 屏 1：出示二维码 -->
+    <div class="phone">
+      <div class="frame">
+        <div class="status"><span>9:41</span><span class="dots">▮▮▮ ⌁ ▰</span></div>
+        <div class="appbar"><div class="back">‹</div><div class="t">添加设备</div></div>
+        <div class="tabs">
+          <div class="tab on">出示二维码</div>
+          <div class="tab">扫码配对</div>
+        </div>
+        <div class="qrbody">
+          <div class="hint">让对方用「扫码配对」扫描此码</div>
+          <div class="qrcard"><svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 27 27" shape-rendering="crispEdges" style="width:100%;height:100%;display:block"><rect x="-1" y="-1" width="27" height="27" fill="#fff"/><g fill="#15181D"><rect x="0" y="0" width="1" height="1"/><rect x="1" y="0" width="1" height="1"/><rect x="2" y="0" width="1" height="1"/><rect x="3" y="0" width="1" height="1"/><rect x="4" y="0" width="1" height="1"/><rect x="5" y="0" width="1" height="1"/><rect x="6" y="0" width="1" height="1"/><rect x="7" y="0" width="1" height="1"/><rect x="8" y="0" width="1" height="1"/><rect x="10" y="0" width="1" height="1"/><rect x="12" y="0" width="1" height="1"/><rect x="13" y="0" width="1" height="1"/><rect x="15" y="0" width="1" height="1"/><rect x="16" y="0" width="1" height="1"/><rect x="17" y="0" width="1" height="1"/><rect x="18" y="0" width="1" height="1"/><rect x="19" y="0" width="1" height="1"/><rect x="20" y="0" width="1" height="1"/><rect x="21" y="0" width="1" height="1"/><rect x="22" y="0" width="1" height="1"/><rect x="23" y="0" width="1" height="1"/><rect x="24" y="0" width="1" height="1"/><rect x="0" y="1" width="1" height="1"/><rect x="1" y="1" width="1" height="1"/><rect x="2" y="1" width="1" height="1"/><rect x="4" y="1" width="1" height="1"/><rect x="5" y="1" width="1" height="1"/><rect x="6" y="1" width="1" height="1"/><rect x="10" y="1" width="1" height="1"/><rect x="12" y="1" width="1" height="1"/><rect x="14" y="1" width="1" height="1"/><rect x="15" y="1" width="1" height="1"/><rect x="16" y="1" width="1" height="1"/><rect x="17" y="1" width="1" height="1"/><rect x="18" y="1" width="1" height="1"/><rect x="20" y="1" width="1" height="1"/><rect x="23" y="1" width="1" height="1"/><rect x="24" y="1" width="1" height="1"/><rect x="0" y="2" width="1" height="1"/><rect x="2" y="2" width="1" height="1"/><rect x="3" y="2" width="1" height="1"/><rect x="4" y="2" width="1" height="1"/><rect x="5" y="2" width="1" height="1"/><rect x="6" y="2" width="1" height="1"/><rect x="7" y="2" width="1" height="1"/><rect x="8" y="2" width="1" height="1"/><rect x="10" y="2" width="1" height="1"/><rect x="11" y="2" width="1" height="1"/><rect x="14" y="2" width="1" height="1"/><rect x="17" y="2" width="1" height="1"/><rect x="18" y="2" width="1" height="1"/><rect x="20" y="2" width="1" height="1"/><rect x="21" y="2" width="1" height="1"/><rect x="22" y="2" width="1" height="1"/><rect x="24" y="2" width="1" height="1"/><rect x="0" y="3" width="1" height="1"/><rect x="2" y="3" width="1" height="1"/><rect x="3" y="3" width="1" height="1"/><rect x="4" y="3" width="1" height="1"/><rect x="6" y="3" width="1" height="1"/><rect x="7" y="3" width="1" height="1"/><rect x="9" y="3" width="1" height="1"/><rect x="10" y="3" width="1" height="1"/><rect x="12" y="3" width="1" height="1"/><rect x="14" y="3" width="1" height="1"/><rect x="18" y="3" width="1" height="1"/><rect x="20" y="3" width="1" height="1"/><rect x="21" y="3" width="1" height="1"/><rect x="22" y="3" width="1" height="1"/><rect x="23" y="3" width="1" height="1"/><rect x="24" y="3" width="1" height="1"/><rect x="0" y="4" width="1" height="1"/><rect x="2" y="4" width="1" height="1"/><rect x="3" y="4" width="1" height="1"/><rect x="4" y="4" width="1" height="1"/><rect x="6" y="4" width="1" height="1"/><rect x="13" y="4" width="1" height="1"/><rect x="18" y="4" width="1" height="1"/><rect x="19" y="4" width="1" height="1"/><rect x="20" y="4" width="1" height="1"/><rect x="21" y="4" width="1" height="1"/><rect x="22" y="4" width="1" height="1"/><rect x="23" y="4" width="1" height="1"/><rect x="24" y="4" width="1" height="1"/><rect x="0" y="5" width="1" height="1"/><rect x="2" y="5" width="1" height="1"/><rect x="4" y="5" width="1" height="1"/><rect x="5" y="5" width="1" height="1"/><rect x="6" y="5" width="1" height="1"/><rect x="7" y="5" width="1" height="1"/><rect x="9" y="5" width="1" height="1"/><rect x="10" y="5" width="1" height="1"/><rect x="11" y="5" width="1" height="1"/><rect x="13" y="5" width="1" height="1"/><rect x="14" y="5" width="1" height="1"/><rect x="18" y="5" width="1" height="1"/><rect x="20" y="5" width="1" height="1"/><rect x="21" y="5" width="1" height="1"/><rect x="22" y="5" width="1" height="1"/><rect x="24" y="5" width="1" height="1"/><rect x="0" y="6" width="1" height="1"/><rect x="1" y="6" width="1" height="1"/><rect x="2" y="6" width="1" height="1"/><rect x="3" y="6" width="1" height="1"/><rect x="4" y="6" width="1" height="1"/><rect x="5" y="6" width="1" height="1"/><rect x="6" y="6" width="1" height="1"/><rect x="8" y="6" width="1" height="1"/><rect x="9" y="6" width="1" height="1"/><rect x="10" y="6" width="1" height="1"/><rect x="11" y="6" width="1" height="1"/><rect x="12" y="6" width="1" height="1"/><rect x="13" y="6" width="1" height="1"/><rect x="14" y="6" width="1" height="1"/><rect x="15" y="6" width="1" height="1"/><rect x="16" y="6" width="1" height="1"/><rect x="18" y="6" width="1" height="1"/><rect x="19" y="6" width="1" height="1"/><rect x="20" y="6" width="1" height="1"/><rect x="21" y="6" width="1" height="1"/><rect x="22" y="6" width="1" height="1"/><rect x="23" y="6" width="1" height="1"/><rect x="24" y="6" width="1" height="1"/><rect x="1" y="7" width="1" height="1"/><rect x="2" y="7" width="1" height="1"/><rect x="3" y="7" width="1" height="1"/><rect x="4" y="7" width="1" height="1"/><rect x="11" y="7" width="1" height="1"/><rect x="16" y="7" width="1" height="1"/><rect x="17" y="7" width="1" height="1"/><rect x="18" y="7" width="1" height="1"/><rect x="20" y="7" width="1" height="1"/><rect x="21" y="7" width="1" height="1"/><rect x="22" y="7" width="1" height="1"/><rect x="23" y="7" width="1" height="1"/><rect x="24" y="7" width="1" height="1"/><rect x="0" y="8" width="1" height="1"/><rect x="1" y="8" width="1" height="1"/><rect x="2" y="8" width="1" height="1"/><rect x="3" y="8" width="1" height="1"/><rect x="4" y="8" width="1" height="1"/><rect x="5" y="8" width="1" height="1"/><rect x="6" y="8" width="1" height="1"/><rect x="9" y="8" width="1" height="1"/><rect x="10" y="8" width="1" height="1"/><rect x="11" y="8" width="1" height="1"/><rect x="12" y="8" width="1" height="1"/><rect x="13" y="8" width="1" height="1"/><rect x="18" y="8" width="1" height="1"/><rect x="19" y="8" width="1" height="1"/><rect x="20" y="8" width="1" height="1"/><rect x="21" y="8" width="1" height="1"/><rect x="23" y="8" width="1" height="1"/><rect x="24" y="8" width="1" height="1"/><rect x="2" y="9" width="1" height="1"/><rect x="4" y="9" width="1" height="1"/><rect x="9" y="9" width="1" height="1"/><rect x="10" y="9" width="1" height="1"/><rect x="11" y="9" width="1" height="1"/><rect x="15" y="9" width="1" height="1"/><rect x="16" y="9" width="1" height="1"/><rect x="23" y="9" width="1" height="1"/><rect x="0" y="10" width="1" height="1"/><rect x="1" y="10" width="1" height="1"/><rect x="2" y="10" width="1" height="1"/><rect x="3" y="10" width="1" height="1"/><rect x="4" y="10" width="1" height="1"/><rect x="6" y="10" width="1" height="1"/><rect x="8" y="10" width="1" height="1"/><rect x="12" y="10" width="1" height="1"/><rect x="13" y="10" width="1" height="1"/><rect x="14" y="10" width="1" height="1"/><rect x="15" y="10" width="1" height="1"/><rect x="16" y="10" width="1" height="1"/><rect x="23" y="10" width="1" height="1"/><rect x="4" y="11" width="1" height="1"/><rect x="6" y="11" width="1" height="1"/><rect x="9" y="11" width="1" height="1"/><rect x="10" y="11" width="1" height="1"/><rect x="13" y="11" width="1" height="1"/><rect x="14" y="11" width="1" height="1"/><rect x="15" y="11" width="1" height="1"/><rect x="18" y="11" width="1" height="1"/><rect x="22" y="11" width="1" height="1"/><rect x="24" y="11" width="1" height="1"/><rect x="0" y="12" width="1" height="1"/><rect x="5" y="12" width="1" height="1"/><rect x="6" y="12" width="1" height="1"/><rect x="9" y="12" width="1" height="1"/><rect x="10" y="12" width="1" height="1"/><rect x="11" y="12" width="1" height="1"/><rect x="12" y="12" width="1" height="1"/><rect x="14" y="12" width="1" height="1"/><rect x="15" y="12" width="1" height="1"/><rect x="16" y="12" width="1" height="1"/><rect x="18" y="12" width="1" height="1"/><rect x="22" y="12" width="1" height="1"/><rect x="2" y="13" width="1" height="1"/><rect x="3" y="13" width="1" height="1"/><rect x="4" y="13" width="1" height="1"/><rect x="5" y="13" width="1" height="1"/><rect x="7" y="13" width="1" height="1"/><rect x="11" y="13" width="1" height="1"/><rect x="15" y="13" width="1" height="1"/><rect x="17" y="13" width="1" height="1"/><rect x="18" y="13" width="1" height="1"/><rect x="24" y="13" width="1" height="1"/><rect x="6" y="14" width="1" height="1"/><rect x="12" y="14" width="1" height="1"/><rect x="16" y="14" width="1" height="1"/><rect x="17" y="14" width="1" height="1"/><rect x="18" y="14" width="1" height="1"/><rect x="19" y="14" width="1" height="1"/><rect x="20" y="14" width="1" height="1"/><rect x="21" y="14" width="1" height="1"/><rect x="0" y="15" width="1" height="1"/><rect x="3" y="15" width="1" height="1"/><rect x="6" y="15" width="1" height="1"/><rect x="8" y="15" width="1" height="1"/><rect x="12" y="15" width="1" height="1"/><rect x="13" y="15" width="1" height="1"/><rect x="15" y="15" width="1" height="1"/><rect x="16" y="15" width="1" height="1"/><rect x="17" y="15" width="1" height="1"/><rect x="19" y="15" width="1" height="1"/><rect x="21" y="15" width="1" height="1"/><rect x="22" y="15" width="1" height="1"/><rect x="23" y="15" width="1" height="1"/><rect x="1" y="16" width="1" height="1"/><rect x="5" y="16" width="1" height="1"/><rect x="6" y="16" width="1" height="1"/><rect x="7" y="16" width="1" height="1"/><rect x="8" y="16" width="1" height="1"/><rect x="10" y="16" width="1" height="1"/><rect x="11" y="16" width="1" height="1"/><rect x="12" y="16" width="1" height="1"/><rect x="15" y="16" width="1" height="1"/><rect x="16" y="16" width="1" height="1"/><rect x="20" y="16" width="1" height="1"/><rect x="21" y="16" width="1" height="1"/><rect x="23" y="16" width="1" height="1"/><rect x="24" y="16" width="1" height="1"/><rect x="3" y="17" width="1" height="1"/><rect x="5" y="17" width="1" height="1"/><rect x="8" y="17" width="1" height="1"/><rect x="11" y="17" width="1" height="1"/><rect x="12" y="17" width="1" height="1"/><rect x="14" y="17" width="1" height="1"/><rect x="15" y="17" width="1" height="1"/><rect x="16" y="17" width="1" height="1"/><rect x="17" y="17" width="1" height="1"/><rect x="18" y="17" width="1" height="1"/><rect x="19" y="17" width="1" height="1"/><rect x="20" y="17" width="1" height="1"/><rect x="22" y="17" width="1" height="1"/><rect x="24" y="17" width="1" height="1"/><rect x="0" y="18" width="1" height="1"/><rect x="1" y="18" width="1" height="1"/><rect x="2" y="18" width="1" height="1"/><rect x="3" y="18" width="1" height="1"/><rect x="4" y="18" width="1" height="1"/><rect x="5" y="18" width="1" height="1"/><rect x="6" y="18" width="1" height="1"/><rect x="7" y="18" width="1" height="1"/><rect x="8" y="18" width="1" height="1"/><rect x="9" y="18" width="1" height="1"/><rect x="10" y="18" width="1" height="1"/><rect x="13" y="18" width="1" height="1"/><rect x="16" y="18" width="1" height="1"/><rect x="18" y="18" width="1" height="1"/><rect x="21" y="18" width="1" height="1"/><rect x="0" y="19" width="1" height="1"/><rect x="1" y="19" width="1" height="1"/><rect x="5" y="19" width="1" height="1"/><rect x="6" y="19" width="1" height="1"/><rect x="7" y="19" width="1" height="1"/><rect x="8" y="19" width="1" height="1"/><rect x="9" y="19" width="1" height="1"/><rect x="10" y="19" width="1" height="1"/><rect x="12" y="19" width="1" height="1"/><rect x="13" y="19" width="1" height="1"/><rect x="14" y="19" width="1" height="1"/><rect x="18" y="19" width="1" height="1"/><rect x="19" y="19" width="1" height="1"/><rect x="20" y="19" width="1" height="1"/><rect x="22" y="19" width="1" height="1"/><rect x="23" y="19" width="1" height="1"/><rect x="24" y="19" width="1" height="1"/><rect x="0" y="20" width="1" height="1"/><rect x="2" y="20" width="1" height="1"/><rect x="3" y="20" width="1" height="1"/><rect x="4" y="20" width="1" height="1"/><rect x="6" y="20" width="1" height="1"/><rect x="8" y="20" width="1" height="1"/><rect x="10" y="20" width="1" height="1"/><rect x="11" y="20" width="1" height="1"/><rect x="12" y="20" width="1" height="1"/><rect x="13" y="20" width="1" height="1"/><rect x="16" y="20" width="1" height="1"/><rect x="18" y="20" width="1" height="1"/><rect x="19" y="20" width="1" height="1"/><rect x="20" y="20" width="1" height="1"/><rect x="21" y="20" width="1" height="1"/><rect x="22" y="20" width="1" height="1"/><rect x="23" y="20" width="1" height="1"/><rect x="24" y="20" width="1" height="1"/><rect x="0" y="21" width="1" height="1"/><rect x="1" y="21" width="1" height="1"/><rect x="2" y="21" width="1" height="1"/><rect x="3" y="21" width="1" height="1"/><rect x="4" y="21" width="1" height="1"/><rect x="6" y="21" width="1" height="1"/><rect x="12" y="21" width="1" height="1"/><rect x="13" y="21" width="1" height="1"/><rect x="15" y="21" width="1" height="1"/><rect x="18" y="21" width="1" height="1"/><rect x="24" y="21" width="1" height="1"/><rect x="0" y="22" width="1" height="1"/><rect x="2" y="22" width="1" height="1"/><rect x="3" y="22" width="1" height="1"/><rect x="4" y="22" width="1" height="1"/><rect x="6" y="22" width="1" height="1"/><rect x="14" y="22" width="1" height="1"/><rect x="15" y="22" width="1" height="1"/><rect x="16" y="22" width="1" height="1"/><rect x="17" y="22" width="1" height="1"/><rect x="18" y="22" width="1" height="1"/><rect x="0" y="23" width="1" height="1"/><rect x="1" y="23" width="1" height="1"/><rect x="6" y="23" width="1" height="1"/><rect x="8" y="23" width="1" height="1"/><rect x="10" y="23" width="1" height="1"/><rect x="11" y="23" width="1" height="1"/><rect x="12" y="23" width="1" height="1"/><rect x="14" y="23" width="1" height="1"/><rect x="18" y="23" width="1" height="1"/><rect x="24" y="23" width="1" height="1"/><rect x="0" y="24" width="1" height="1"/><rect x="1" y="24" width="1" height="1"/><rect x="2" y="24" width="1" height="1"/><rect x="3" y="24" width="1" height="1"/><rect x="4" y="24" width="1" height="1"/><rect x="5" y="24" width="1" height="1"/><rect x="6" y="24" width="1" height="1"/><rect x="7" y="24" width="1" height="1"/><rect x="8" y="24" width="1" height="1"/><rect x="10" y="24" width="1" height="1"/><rect x="12" y="24" width="1" height="1"/><rect x="13" y="24" width="1" height="1"/><rect x="14" y="24" width="1" height="1"/><rect x="18" y="24" width="1" height="1"/><rect x="22" y="24" width="1" height="1"/><rect x="24" y="24" width="1" height="1"/></g></svg></div>
+          <div class="count">剩余 09:42</div>
+          <div class="addr">2409:8a00:…:2:2425</div>
+          <div class="rowbtns">
+            <div class="btn-s">刷新二维码</div>
+            <div class="btn-s">收起</div>
+          </div>
+          <div class="foot-hint">刷新或收起后旧码立即失效</div>
+        </div>
+      </div>
+      <div class="cap"><b>① 出示二维码（基本不变）</b>仅把按钮层级收一下：刷新为主操作，收起退为文字按钮。</div>
+    </div>
+
+    <!-- 屏 2：扫描页（核心） -->
+    <div class="phone">
+      <div class="frame">
+        <div class="status"><span>9:41</span><span class="dots">▮▮▮ ⌁ ▰</span></div>
+        <div class="appbar"><div class="back">‹</div><div class="t">添加设备</div></div>
+        <div class="tabs">
+          <div class="tab">出示二维码</div>
+          <div class="tab on">扫码配对</div>
+        </div>
+        <div class="cambody">
+          <div class="cam">
+            <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+            <div class="mask"></div>
+            <div class="vf">
+              <div class="corner tl"></div><div class="corner tr"></div>
+              <div class="corner bl"></div><div class="corner br"></div>
+              <div class="scanline"></div>
+            </div>
+            <div class="torch" style="left:12px;right:auto">🖼</div>
+            <div class="torch">☀</div>
+            <div class="sidetip">自动识别 · 无需按快门</div>
+          </div>
+          <div class="camhint">把对方的二维码放进框内
+            <span>光线不足时点右上角手电筒</span>
+          </div>
+          <div class="note">手电筒在右上角，相册在左上角<br>配对只建立设备信任，不会自动发送文件</div>
+        </div>
+      </div>
+      <div class="cap"><b>② 扫码配对（重做核心）</b>真相机预览嵌在页内，竖屏；四角取景框 + 扫描线；手电筒与相册做成预览上的悬浮按钮，扫不到时还有出口。</div>
+    </div>
+
+    <!-- 屏 3：确认卡 -->
+    <div class="phone">
+      <div class="frame">
+        <div class="status"><span>9:41</span><span class="dots">▮▮▮ ⌁ ▰</span></div>
+        <div class="appbar"><div class="back">‹</div><div class="t">添加设备</div></div>
+        <div class="tabs">
+          <div class="tab">出示二维码</div>
+          <div class="tab on">扫码配对</div>
+        </div>
+        <div class="cambody" style="padding-bottom:0">
+          <div class="cam" style="filter:saturate(.9)">
+            <div class="blob b1"></div><div class="blob b2"></div>
+            <div class="mask" style="background:rgba(8,12,18,.35);box-shadow:none"></div>
+          </div>
+        </div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <div class="okrow">
+            <div class="okicon">✓</div>
+            <div><div class="tt">识别成功</div><div class="ss">请确认这是对方的设备</div></div>
+          </div>
+          <div class="dev">
+            <div><div class="nm">小美的 iPhone</div><div class="ip">2409:8a00:…:5 · 2425</div></div>
+            <div class="av">▤</div>
+          </div>
+          <p class="expl">确认后对方屏幕上会弹出「允许配对」，同意后双方互相加入设备列表。<br>配对不会传输任何文件。</p>
+          <div class="btnbig">确认连接</div>
+          <div class="btngray">重新扫描</div>
+        </div>
+      </div>
+      <div class="cap"><b>③ 扫到码之后</b>不再是居中 AlertDialog：底部卡片贴着视线，设备名和地址一眼可核；误扫时「重新扫描」就在下面。</div>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">3</span>异常与过渡状态</h2>
+  <p class="lead">这四种状态现在只有一个 Toast 或干脆没有反馈，改版后都留在扫码页里，用户不用猜。</p>
+  <div class="states">
+    <div class="state">
+      <div class="ic" style="background:#FFF4E5;color:#B8860B">!</div>
+      <b>相机权限被拒</b>
+      <p>取景区换成说明卡：「无法使用相机」+ 为什么需要 + 两个出口：去系统设置、改用相册识别。</p>
+      <div class="act2">去设置 →</div>
+    </div>
+    <div class="state">
+      <div class="ic" style="background:#FDEDED;color:#C62828">×</div>
+      <b>扫到的不是配对码</b>
+      <p>取景框转红 0.6s + 页内提示条：「这不是数据线的配对二维码」，2 秒后自动恢复扫描。</p>
+      <div class="act2">继续扫描</div>
+    </div>
+    <div class="state">
+      <div class="ic" style="background:#EAF2FE;color:#1E6FD9">…</div>
+      <b>配对中</b>
+      <p>确认卡的按钮转圈「等待对方允许…」，相机暂停、禁止重复提交；15 秒无应答给超时提示。</p>
+      <div class="act2">可取消</div>
+    </div>
+    <div class="state">
+      <div class="ic" style="background:#E9F7EE;color:#1E9E4A">✓</div>
+      <b>配对成功</b>
+      <p>确认卡整卡换成绿色对勾 + 「已添加 小美的 iPhone」，1.2 秒后自动返回主界面并在列表里高亮。</p>
+      <div class="act2">返回列表</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">4</span>交互与规则</h2>
+  <div class="two">
+    <div class="panel">
+      <h3>状态机</h3>
+      <table>
+        <tr><th>状态</th><th>触发</th><th>表现</th></tr>
+        <tr><td>Scanning</td><td>进入扫码 Tab / 取消确认</td><td>取景框白色四角 + 扫描线循环</td></tr>
+        <tr><td>Found</td><td>解出 <code>FG_QR</code></td><td>暂停解码，底部卡片升起 220ms</td></tr>
+        <tr><td>Pairing</td><td>点「确认连接」</td><td>按钮 loading，卡片锁定，15s 超时</td></tr>
+        <tr><td>Success</td><td>收到 <code>HELLO_ACK|OK</code></td><td>绿勾 1.2s 后自动返回</td></tr>
+        <tr><td>Error</td><td>非配对码 / 拒绝 / 超时</td><td>框闪红 + 提示条，可重扫</td></tr>
+      </table>
+    </div>
+    <div class="panel">
+      <h3>关键规则</h3>
+      <ul class="tight">
+        <li><b>竖屏优先</b>：扫码页固定竖屏；横屏时改为左右分栏（左预览、右说明），不再锁死横屏。</li>
+        <li><b>只扫一次</b>：识别成功立刻停解码，避免同一码连发多次 <code>FG_HELLO</code>。</li>
+        <li><b>不自动跳转</b>：扫码成功不会自动发文件、不会自动配对，必须人点确认。</li>
+        <li><b>页面离开即停相机</b>：切到出示二维码 Tab 或返回时释放 CameraX/ZXing 资源，不让相机在后台常开。</li>
+        <li><b>与出示页互斥</b>：同一时刻只有一侧占用相机与配对 token。</li>
+        <li><b>无障碍</b>：取景框带 contentDescription「扫描二维码取景框」；扫描线动画可被系统"减少动态效果"关闭；所有按钮 ≥ 48dp。</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout" style="margin-top:16px">
+    <b>为什么不再用独立扫描 Activity：</b>跳出页面会丢掉"我在添加设备"的上下文，而且 ZXing CaptureActivity 的横屏、系统样式、返回栈都改不动。
+    改成页内 <code>DecoratedBarcodeView</code>（journeyapps 自带，无需新增依赖）+ Compose <code>AndroidView</code> 嵌入，取景框、手电筒、相册都能自己控制。
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">5</span>实现落点（已实现 · v2.4）</h2>
+  <table>
+    <tr><th style="width:26%">文件</th><th>改动</th></tr>
+    <tr><td><code>MainActivity.kt</code> · PairScreen</td><td>扫码 Tab 由「黑框 + 按钮」改为 <code>AndroidView { DecoratedBarcodeView }</code>；自定义 <code> ViewfinderView</code> 画四角与扫描线；解码回调里只取第一次结果。</td></tr>
+    <tr><td><code>MainActivity.kt</code> · 确认层</td><td><code>AlertDialog</code> 改为 <code>ModalBottomSheet</code>；<code>pairing</code> 状态驱动 loading 与 15s 超时；成功后绿勾延时返回。</td></tr>
+    <tr><td>新增 <code>ScannerView.kt</code></td><td>封装相机视图：生命周期绑定、手电筒开关、相册识别（<code>RGBLuminanceSource</code>）、权限拒绝态。</td></tr>
+    <tr><td><code>AndroidManifest.xml</code></td><td>MainActivity 加 <code>configChanges</code> 由 Compose 自行处理旋转；不再依赖 CaptureActivity 的横屏声明。</td></tr>
+    <tr><td>依赖</td><td>不新增：<code>zxing-android-embedded 4.3.0</code> 已含 <code>DecoratedBarcodeView</code> 与 <code>BarcodeCallback</code>。</td></tr>
+  </table>
+  <p class="lead" style="margin-top:14px">工作量集中在扫描页本身，配对协议（<code>FG_QR / FG_HELLO</code>）与 token 规则一行未改。v2.4 已按此实现：<code>compileDebugKotlin</code> 通过，正式包 <code>数据线.apk</code> 已签名。</p>
+</section>
+
+</div>
+</body>
+</html>

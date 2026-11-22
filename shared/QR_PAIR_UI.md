@@ -429,3 +429,21 @@ IPv6 地址用等宽字体（`Consolas` / `monospace`），10px，`word-break: b
 5. 合并时保留**配对时的地址**（IPv6 优先），广播只用于更新在线状态。
 
 界面改动：左栏标题回到「设备」；「＋ 扫码添加设备」仍是唯一配对入口（默认收起）；右键菜单恢复「刷新设备」；空状态文案改为「同网段设备会自动出现；跨网段请点上方『扫码添加设备』」。
+
+## 十二、v2.4 扫码页实现变更（页内相机）
+
+原实现：扫码 Tab 内是一个 260dp 深色占位框（只有二维码图标），点「打开相机扫码」跳转 ZXing `CaptureActivity`，该 Activity 锁横屏，扫完回页再弹居中对话框。
+
+v2.4 改为**页内相机**，设计与实现说明见 [`SCAN_PAIR_REDESIGN.html`](SCAN_PAIR_REDESIGN.html)：
+
+| 事项 | 现在 |
+|---|---|
+| 取景 | `BarcodeView`（zxing-android-embedded）以 `AndroidView` 内嵌，竖屏上下、横屏左右分栏 |
+| 取景框 | Compose `Canvas` 绘制：外部压暗、四角 3.5dp 括号、2.2s 往复扫描线 |
+| 扫错码 | 四角转红 650ms + Toast，不打断取景 |
+| 手电筒 / 相册 | 预览内悬浮按钮；相册用 `RGBLuminanceSource + HybridBinarizer` 解码，权限被拒时同样可用 |
+| 确认 | 居中 `AlertDialog` → `ModalBottomSheet`：识别成功 / 等待对方允许 / 失败重扫 |
+| 权限 | 拒绝时给说明卡（授权 / 去设置 / 相册），从设置返回会重新检测并自动开相机 |
+| 旋转 | `MainActivity` 声明 `configChanges`，扫码中旋转不重建页面、不中断相机 |
+
+协议与 token 规则未改（`FG_QR / FG_HELLO / FG_HELLO_ACK`）。

@@ -44,8 +44,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -243,7 +241,7 @@ fun AppScreen() {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("飞书", fontWeight = FontWeight.Bold) },
+                title = { Text("数据线", fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = { showLogs = true }) {
                         Icon(Icons.Default.Article, "日志")
@@ -518,17 +516,14 @@ fun ProgressBar(progress: ProgressInfo?) {
 
 // ---------------- 二维码配对页 ----------------
 
-private fun scanOptions(): ScanOptions = ScanOptions().apply {
-    setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-    setPrompt("对准对方的配对二维码")
-    setBeepEnabled(false)
-    setOrientationLocked(false)
-}
-
 private fun formatRemaining(ms: Long): String {
     val total = (ms / 1000).coerceAtLeast(0)
     return String.format("%02d:%02d", total / 60, total % 60)
 }
+
+private const val PAIR_IDLE = 0
+private const val PAIR_BUSY = 1
+private const val PAIR_OK = 2
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -538,13 +533,14 @@ fun PairScreen(onBack: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val session by AppState.pairSession.collectAsState()
     val localIp by AppState.localIp.collectAsState()
-    val successTick by AppState.pairSuccess.collectAsState()
     var remaining by remember { mutableLongStateOf(0L) }
     var qr by remember { mutableStateOf<Bitmap?>(null) }
     var scanned by remember { mutableStateOf<Protocol.QrPayload?>(null) }
-    var pairing by remember { mutableStateOf(false) }
+    var pairState by remember { mutableIntStateOf(PAIR_IDLE) }
+    var pairError by remember { mutableStateOf<String?>(null) }
+    var scanError by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
-    val openedAt by remember { mutableLongStateOf(successTick) }
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     // 进入配对页才生成 token；离开即作废
     LaunchedEffect(Unit) { engine.beginPairing() }
@@ -569,74 +565,87 @@ fun PairScreen(onBack: () -> Unit) {
         qr = QrUtils.generate(payload)
     }
 
-    LaunchedEffect(successTick) {
-        if (successTick > openedAt) {
-            Toast.makeText(ctx, "配对成功，设备已加入列表", Toast.LENGTH_SHORT).show()
+    // 配对成功后绿勾停一下，再回设备列表
+    LaunchedEffect(pairState) {
+        if (pairState == PAIR_OK) {
+            delay(1200)
+            scanned = null
             onBack()
         }
     }
 
-    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
-        val contents = result.contents
-        if (!contents.isNullOrBlank()) {
-            val payload = Protocol.parseQrPayload(contents)
-            if (payload == null) {
-                Toast.makeText(ctx, "这不是飞鸽的配对二维码", Toast.LENGTH_LONG).show()
-            } else {
-                scanned = payload
+    fun closeSheet() {
+        scope.launch { sheet.hide() }.invokeOnCompletion {
+            if (!sheet.isVisible) {
+                scanned = null
+                pairState = PAIR_IDLE
+                pairError = null
             }
         }
     }
-    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) scanLauncher.launch(scanOptions())
-        else Toast.makeText(ctx, "需要相机权限才能扫码", Toast.LENGTH_LONG).show()
+
+    fun acceptScan(text: String) {
+        if (pairState == PAIR_BUSY) return
+        if (text.isBlank()) {
+            scanError++
+            Toast.makeText(ctx, "没认出二维码，请对准后重试", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val payload = Protocol.parseQrPayload(text)
+        if (payload == null) {
+            scanError++
+            Toast.makeText(ctx, "这不是数据线的配对二维码", Toast.LENGTH_SHORT).show()
+        } else {
+            pairError = null
+            pairState = PAIR_IDLE
+            scanned = payload
+        }
     }
 
-    fun startScan() {
-        val granted = ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) ==
-            PackageManager.PERMISSION_GRANTED
-        if (granted) scanLauncher.launch(scanOptions())
-        else cameraPermission.launch(Manifest.permission.CAMERA)
-    }
-
-    // 扫到码后先确认对方身份，用户点「确认连接」才发 FG_HELLO
     scanned?.let { payload ->
-        AlertDialog(
-            onDismissRequest = { if (!pairing) scanned = null },
-            title = { Text("确认连接到这台设备？") },
-            text = {
-                Column {
-                    Text(payload.name, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "${payload.ip}:${payload.tcpPort}",
-                        fontSize = 11.sp, color = C.Gray, fontFamily = FontFamily.Monospace
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "确认后还需要对方在设备上允许配对；成功后对方会加入你的设备列表，不会自动发送文件。",
-                        fontSize = 12.sp, color = C.Gray
-                    )
+        ModalBottomSheet(
+            onDismissRequest = { if (pairState != PAIR_BUSY) closeSheet() },
+            sheetState = sheet,
+            containerColor = Color.White
+        ) {
+            if (pairState == PAIR_OK) {
+                Column(
+                    Modifier.fillMaxWidth().padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        Modifier.size(56.dp).background(Color(0xFFE9F7EE), RoundedCornerShape(28.dp)),
+                        contentAlignment = Alignment.Center
+                    ) { Icon(Icons.Default.Check, null, tint = C.Green, modifier = Modifier.size(30.dp)) }
+                    Spacer(Modifier.height(14.dp))
+                    Text("已添加 ${payload.name}", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    Text("设备已加入列表，正在返回…", fontSize = 11.5.sp, color = C.Gray)
+                    Spacer(Modifier.height(18.dp))
                 }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !pairing,
-                    onClick = {
-                        pairing = true
-                        scope.launch {
-                            val (ok, msg) = engine.pairWith(payload.ip, payload.tcpPort, payload.token)
-                            pairing = false
-                            scanned = null
-                            Toast.makeText(ctx, if (ok) msg else "配对失败：$msg", Toast.LENGTH_LONG).show()
+            } else {
+                PairConfirmCard(
+                    payload = payload,
+                    busy = pairState == PAIR_BUSY,
+                    error = pairError,
+                    onConfirm = {
+                        if (pairState != PAIR_BUSY) {
+                            pairState = PAIR_BUSY
+                            scope.launch {
+                                val (ok, msg) = engine.pairWith(payload.ip, payload.tcpPort, payload.token)
+                                if (ok) {
+                                    pairState = PAIR_OK
+                                } else {
+                                    pairState = PAIR_IDLE
+                                    pairError = msg
+                                }
+                            }
                         }
-                    }
-                ) { Text(if (pairing) "配对中…" else "确认连接") }
-            },
-            dismissButton = {
-                TextButton(enabled = !pairing, onClick = { scanned = null }) { Text("取消") }
+                    },
+                    onRetry = { closeSheet() }
+                )
             }
-        )
+        }
     }
 
     Scaffold(
@@ -656,83 +665,203 @@ fun PairScreen(onBack: () -> Unit) {
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("扫码配对") })
             }
 
-            Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                if (tab == 0) {
-                    Text("让对方用「扫码配对」扫描此码", fontSize = 12.sp, color = C.Gray)
-                    Spacer(Modifier.height(16.dp))
+            if (tab == 0) {
+                QrDisplayTab(
+                    qr = qr,
+                    remaining = remaining,
+                    localIp = localIp,
+                    onRefresh = { engine.beginPairing() },
+                    onCollapse = onBack
+                )
+            } else {
+                ScanTab(
+                    active = scanned == null,
+                    errorSignal = scanError,
+                    onText = ::acceptScan
+                )
+            }
+        }
+    }
+}
 
-                    val bitmap = qr
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = C.Card),
-                        shape = RoundedCornerShape(16.dp),
-                        elevation = CardDefaults.cardElevation(1.dp)
-                    ) {
-                        Box(Modifier.size(260.dp).padding(14.dp), contentAlignment = Alignment.Center) {
-                            if (bitmap != null) {
-                                Image(bitmap.asImageBitmap(), "配对二维码", Modifier.fillMaxSize())
-                            } else {
-                                Text("正在生成二维码…", fontSize = 12.sp, color = C.Gray)
-                            }
-                        }
-                    }
+/** 出示二维码：保持原样，只把「刷新」提为主操作 */
+@Composable
+private fun QrDisplayTab(
+    qr: Bitmap?,
+    remaining: Long,
+    localIp: String,
+    onRefresh: () -> Unit,
+    onCollapse: () -> Unit
+) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("让对方用「扫码配对」扫描此码", fontSize = 12.sp, color = C.Gray)
+        Spacer(Modifier.height(16.dp))
 
-                    Spacer(Modifier.height(14.dp))
-                    val expired = remaining <= 0
-                    Text(
-                        if (expired) "二维码已过期" else "剩余 ${formatRemaining(remaining)}",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = when {
-                            expired -> C.Red
-                            remaining <= 60_000 -> C.Amber
-                            else -> C.Blue
-                        }
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "$localIp:${P2PEngine.TCP_PORT}",
-                        fontSize = 11.sp, color = C.Gray,
-                        fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(onClick = { engine.beginPairing() }) {
-                            Text(if (expired) "重新生成" else "刷新二维码")
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        TextButton(onClick = onBack) { Text("收起") }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Text("刷新或收起后旧码立即失效", fontSize = 11.sp, color = C.Gray)
+        Card(
+            colors = CardDefaults.cardColors(containerColor = C.Card),
+            shape = RoundedCornerShape(16.dp),
+            elevation = CardDefaults.cardElevation(1.dp)
+        ) {
+            Box(Modifier.size(260.dp).padding(14.dp), contentAlignment = Alignment.Center) {
+                if (qr != null) {
+                    Image(qr.asImageBitmap(), "配对二维码", Modifier.fillMaxSize())
                 } else {
-                    Text("扫描对方出示的二维码", fontSize = 12.sp, color = C.Gray)
-                    Spacer(Modifier.height(16.dp))
-                    Box(
-                        Modifier.fillMaxWidth().height(260.dp)
-                            .background(Color(0xFF15181D), RoundedCornerShape(14.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.QrCodeScanner, null,
-                            tint = Color.White, modifier = Modifier.size(76.dp)
-                        )
-                    }
-                    Spacer(Modifier.height(20.dp))
-                    Button(onClick = { startScan() }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                        Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("打开相机扫码")
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "扫码后先确认对方身份，再由对方允许配对；\n配对只建立设备信任，不会自动发文件。",
-                        fontSize = 11.sp, color = C.Gray, textAlign = TextAlign.Center
-                    )
+                    Text("正在生成二维码…", fontSize = 12.sp, color = C.Gray)
                 }
             }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        val expired = remaining <= 0
+        Text(
+            if (expired) "二维码已过期" else "剩余 ${formatRemaining(remaining)}",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = when {
+                expired -> C.Red
+                remaining <= 60_000 -> C.Amber
+                else -> C.Blue
+            }
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "$localIp:${P2PEngine.TCP_PORT}",
+            fontSize = 11.sp, color = C.Gray,
+            fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = onRefresh) { Text(if (expired) "重新生成" else "刷新二维码") }
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = onCollapse) { Text("收起") }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text("刷新或收起后旧码立即失效", fontSize = 11.sp, color = C.Gray)
+    }
+}
+
+/** 扫码配对：竖屏为上下布局，横屏自动切成左右两栏，相机始终在页内 */
+@Composable
+private fun ScanTab(active: Boolean, errorSignal: Int, onText: (String) -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxSize().padding(16.dp)) {
+        val wide = maxWidth > maxHeight
+        if (wide) {
+            Row(Modifier.fillMaxSize()) {
+                ScannerPane(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    active = active,
+                    errorSignal = errorSignal,
+                    onText = onText
+                )
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.width(200.dp).fillMaxHeight(), verticalArrangement = Arrangement.Center) {
+                    ScanHints()
+                }
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                ScannerPane(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    active = active,
+                    errorSignal = errorSignal,
+                    onText = onText
+                )
+                Spacer(Modifier.height(14.dp))
+                ScanHints()
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScanHints() {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("把对方的二维码放进框内", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "光线不足点右上角手电筒，也可以点左上角从相册选图",
+            fontSize = 11.sp, color = C.Gray, textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(8.dp))
+        Text("配对只建立设备信任，不会自动发送文件", fontSize = 10.5.sp, color = C.Gray)
+    }
+}
+
+/** 扫到码后的确认卡：贴着视线，误扫时「重新扫描」就在下面 */
+@Composable
+private fun PairConfirmCard(
+    payload: Protocol.QrPayload,
+    busy: Boolean,
+    error: String?,
+    onConfirm: () -> Unit,
+    onRetry: () -> Unit
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 22.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(36.dp).background(Color(0xFFE9F7EE), RoundedCornerShape(18.dp)),
+                contentAlignment = Alignment.Center
+            ) { Icon(Icons.Default.Check, null, tint = C.Green, modifier = Modifier.size(20.dp)) }
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text("识别成功", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text("请确认这是对方的设备", fontSize = 11.sp, color = C.Gray)
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Row(
+            Modifier.fillMaxWidth().background(Color(0xFFF7F9FC), RoundedCornerShape(12.dp))
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(payload.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    "${payload.ip}:${payload.tcpPort}",
+                    fontSize = 10.5.sp, color = C.Gray, fontFamily = FontFamily.Monospace
+                )
+            }
+            Box(
+                Modifier.size(36.dp).background(Color(0xFFE4EDFB), RoundedCornerShape(9.dp)),
+                contentAlignment = Alignment.Center
+            ) { Icon(Icons.Default.Devices, null, tint = C.Blue, modifier = Modifier.size(19.dp)) }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        Text(
+            "确认后对方屏幕上会弹出「允许配对」，同意后双方互相加入设备列表。配对不会传输任何文件。",
+            fontSize = 11.sp, color = C.Gray, lineHeight = 17.sp
+        )
+
+        if (error != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(error, fontSize = 11.sp, color = C.Red, lineHeight = 16.sp)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = onConfirm,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            if (busy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("等待对方允许…")
+            } else {
+                Text("确认连接", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        TextButton(onClick = onRetry, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+            Text("重新扫描")
         }
     }
 }
@@ -804,7 +933,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Column(Modifier.padding(16.dp)) {
                     Text("接收目录", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(4.dp))
-                    Text("公共下载目录 / 飞鸽收件/", fontSize = 12.sp, color = C.Gray)
+                    Text("公共下载目录 / 数据线收件/", fontSize = 12.sp, color = C.Gray)
                 }
             }
             Card(colors = CardDefaults.cardColors(containerColor = C.Card), shape = RoundedCornerShape(12.dp)) {
@@ -814,7 +943,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     val ver = try {
                         ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
                     } catch (e: Exception) { "?" }
-                    Text("飞书 · v$ver", fontSize = 12.sp, color = C.Gray)
+                    Text("数据线 · v$ver", fontSize = 12.sp, color = C.Gray)
                     Text("build 2026-11-21 · 广播发现 + 二维码配对 · 接收需确认", fontSize = 11.sp, color = C.Gray)
                 }
             }
