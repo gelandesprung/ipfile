@@ -47,7 +47,7 @@ import kotlinx.coroutines.withContext
  *
  * 与 PC 的「网页模式」窗口同构：访问地址（可切 IPv4/IPv6）+ 二维码 + PIN + 在线访客 + 群发。
  * 差异只在平台能力：
- * - 安卓不选保存位置，访客上传直接进公共 Download/飞鸽收件/（与 P2P 接收一致）
+ * - 安卓不选保存位置，访客上传直接进公共 Download/数据线收件/（与 P2P 接收一致）
  * - 服务由前台服务持有，退出这个页面不会停服（要停请点「停止服务」）
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -62,7 +62,6 @@ fun WebModeScreen(onBack: () -> Unit) {
     val guests by AppState.webGuests.collectAsState()
     val pinRotatedAt by AppState.pinRotatedAt.collectAsState()
 
-    var family by rememberSaveable { mutableStateOf("v4") }
     var selecting by remember { mutableStateOf(false) }
     val selected = remember { mutableStateMapOf<String, Boolean>() }
     var sheetGuest by remember { mutableStateOf<WebGuest?>(null) }
@@ -76,6 +75,9 @@ fun WebModeScreen(onBack: () -> Unit) {
     val v6 = remember(addrTick) { NetUtils.localIpV6() }
     val hasV4 = v4.isNotEmpty() && v4 != "127.0.0.1"
     val hasV6 = v6.isNotEmpty()
+
+    // 默认 IPv6：本机没有可用 IPv6 时才退回 IPv4，绝不给出对方连不上的地址
+    var family by rememberSaveable { mutableStateOf(if (hasV6) "v6" else "v4") }
 
     // 选中的地址族突然没地址了（换网、关了 v6），退回 IPv4 而不是显示死链
     LaunchedEffect(hasV6) { if (!hasV6 && family == "v6") family = "v4" }
@@ -456,7 +458,7 @@ fun UploadConfirmDialog() {
                     Spacer(Modifier.height(6.dp))
                     Text("${NetUtils.formatSize(p.size)} · 来自 ${p.guestName}", fontSize = 12.sp, color = C.Gray)
                     Spacer(Modifier.height(10.dp))
-                    Text("接收后保存到 Download/飞鸽收件/", fontSize = 11.sp, color = C.Gray)
+                    Text("接收后保存到 Download/数据线收件/", fontSize = 11.sp, color = C.Gray)
                     Spacer(Modifier.height(6.dp))
                     Text("60 秒内未选择将自动拒绝", fontSize = 11.sp, color = C.Amber)
                 }

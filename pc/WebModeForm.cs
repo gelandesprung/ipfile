@@ -36,7 +36,8 @@ internal sealed class WebModeForm : Form
     /// <summary>PIN 被自动更换后短暂高亮，提示 Host 注意看新码。</summary>
     private readonly System.Windows.Forms.Timer _pinFlash = new() { Interval = 2400 };
 
-    private string _family = "v4";
+    // 默认 IPv6：本机没有可用 IPv6 时，RefreshAddress 会自动回退到 IPv4
+    private string _family = "v6";
     private bool _allowClose;
 
     public WebModeForm(WebHostService web, Action onStateChanged)

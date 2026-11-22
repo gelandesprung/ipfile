@@ -186,7 +186,7 @@ class ReceiveService : Service() {
         val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), pendingFlags())
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("飞书")
+            .setContentTitle("数据线")
             .setContentText(text)
             .setContentIntent(pi)
             .setOngoing(true)
@@ -263,7 +263,7 @@ class ReceiveService : Service() {
             .setContentText(detail)
             .setStyle(
                 NotificationCompat.BigTextStyle()
-                    .bigText("$detail\n接收后保存到 Download/飞鸽收件/，60 秒内未选择将自动拒绝")
+                    .bigText("$detail\n接收后保存到 Download/数据线收件/，60 秒内未选择将自动拒绝")
             )
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)

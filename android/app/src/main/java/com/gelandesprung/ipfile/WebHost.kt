@@ -823,7 +823,7 @@ class WebHost(private val appContext: Context) {
             return
         }
 
-        // 安卓端不选保存位置：直接进公共 Download/飞鸽收件/，与 P2P 接收同一套落盘
+        // 安卓端不选保存位置：直接进公共 Download/数据线收件/，与 P2P 接收同一套落盘
         val target = try {
             NetUtils.createReceiveStream(appContext, fileName)
         } catch (e: Exception) {
@@ -969,7 +969,7 @@ class WebHost(private val appContext: Context) {
         appContext.assets.open("guest.html").bufferedReader().use { it.readText() }
     } catch (e: Exception) {
         log("访客页资源缺失：${e.message}")
-        "<!DOCTYPE html><meta charset=\"utf-8\"><title>飞鸽</title>" +
+        "<!DOCTYPE html><meta charset=\"utf-8\"><title>数据线</title>" +
             "<p style=\"font-family:sans-serif;padding:24px\">访客页资源缺失，请重新安装应用。</p>"
     }
 

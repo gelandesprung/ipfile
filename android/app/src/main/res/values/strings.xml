@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">飞书</string>
+    <string name="app_name">数据线</string>
     <string name="notification_channel">文件接收服务</string>
 </resources>

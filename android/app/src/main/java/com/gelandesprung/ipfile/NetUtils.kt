@@ -145,7 +145,7 @@ object NetUtils {
         return best ?: "127.0.0.1"
     }
 
-    /** 在共享 Download/飞鸽收件/ 下创建输出流；同名自动加 (1)(2)。 */
+    /** 在共享 Download/数据线收件/ 下创建输出流；同名自动加 (1)(2)。 */
     fun createReceiveStream(context: Context, fileName: String): ReceiveTarget {
         val base = fileName.substringAfterLast('/').substringAfterLast('\\').ifEmpty { "未命名文件" }
         val mime = mimeOf(base)
@@ -155,7 +155,7 @@ object NetUtils {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, finalName)
                 put(MediaStore.Downloads.MIME_TYPE, mime)
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/飞鸽收件")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/数据线收件")
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
             val uri: Uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -175,17 +175,17 @@ object NetUtils {
                 try { out.close() } catch (e: Exception) { }
                 try { context.contentResolver.delete(uri, null, null) } catch (e: Exception) { }
             }
-            ReceiveTarget(finalOut, "Download/飞鸽收件/$finalName", uri, discard)
+            ReceiveTarget(finalOut, "Download/数据线收件/$finalName", uri, discard)
         } else {
             // Android 9 及以下：公共 Download 目录，经 FileProvider 暴露以便「点击打开」
-            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "飞鸽收件")
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "数据线收件")
             dir.mkdirs()
             val file = File(dir, uniqueNameFile(dir, base))
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
             val discard: () -> Unit = {
                 try { file.delete() } catch (e: Exception) { }
             }
-            ReceiveTarget(file.outputStream(), "Download/飞鸽收件/${file.name}", uri, discard)
+            ReceiveTarget(file.outputStream(), "Download/数据线收件/${file.name}", uri, discard)
         }
     }
 
@@ -248,7 +248,7 @@ object NetUtils {
 
     fun notifyScan(context: Context, displayName: String) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            val f = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "飞鸽收件/$displayName")
+            val f = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "数据线收件/$displayName")
             MediaScannerConnection.scanFile(context, arrayOf(f.absolutePath), null, null)
         }
     }

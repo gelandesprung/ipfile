@@ -18,7 +18,7 @@ static class Program
         catch (Exception ex)
         {
             LogCrash(ex.ToString(), "Main");
-            MessageBox.Show("程序发生错误，详情见 crash.log", "飞鸽 P2P", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show("程序发生错误，详情见 crash.log", "数据线", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 

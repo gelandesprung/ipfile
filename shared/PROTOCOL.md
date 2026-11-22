@@ -1,4 +1,4 @@
-# 飞鸽 P2P 通信协议 v2.1
+# 数据线 通信协议 v2.1
 
 两端（PC / Android）必须严格遵守本协议，否则无法互通。协议刻意设计得极简，只用标准 socket，不加密、不压缩、无依赖。
 
@@ -204,7 +204,7 @@ FG_FILE|1|<name_b64>|<size>|<filecount>\n
 ## 6. 接收目录
 
 - PC 端：程序目录下的 `received/`
-- Android 端：公共 Download 目录下的 `飞鸽收件/`
+- Android 端：公共 Download 目录下的 `数据线收件/`
 
 ## 7. 设计取舍说明
 

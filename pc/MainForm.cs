@@ -99,7 +99,7 @@ public sealed class MainForm : Form
         if (tcpError == null)
             AppendLog($"接收服务已就绪 · 监听 [::]:{_config.TcpPort}（IPv4/IPv6 双栈）", Color.FromArgb(25, 140, 60));
         else
-            AppendLog($"接收服务启动失败：{tcpError}（端口可能被占用，或已有飞鸽在运行）", Color.FromArgb(190, 40, 40));
+            AppendLog($"接收服务启动失败：{tcpError}（端口可能被占用，或已有数据线在运行）", Color.FromArgb(190, 40, 40));
 
         if (udpError == null)
             AppendLog($"局域网自动发现已开启 · 广播端口 {_config.UdpPort}，同网段设备会自动出现在列表中", Color.FromArgb(25, 140, 60));
@@ -114,7 +114,7 @@ public sealed class MainForm : Form
 
     private void BuildUi()
     {
-        Text = "飞鸽 P2P · 局域网互传";
+        Text = "数据线 · 局域网互传";
         Icon = LoadAppIcon(new Size(48, 48));
         // 下面的尺寸都是 96 DPI 的设计值，AutoScaleMode.None + 手工 Scale 会整体放大
         Size = new Size(920, 660);
@@ -1427,7 +1427,7 @@ public sealed class MainForm : Form
 
     private void BuildTray()
     {
-        _tray.Text = $"飞鸽 P2P · {_config.DeviceName}";
+        _tray.Text = $"数据线 · {_config.DeviceName}";
         // 托盘按系统小图标尺寸取帧，150%/200% 缩放下也不会糊
         _tray.Icon = LoadAppIcon(SystemInformation.SmallIconSize) ?? SystemIcons.Application;
         _tray.Visible = true;
@@ -1437,7 +1437,7 @@ public sealed class MainForm : Form
         menu.Items.Add(new ToolStripMenuItem("打开主界面", null, (_, _) => ShowFromTray()) { Font = new Font("微软雅黑", 9F, FontStyle.Bold) });
         menu.Items.Add(new ToolStripMenuItem("网页模式…", null, (_, _) => OpenWebMode()));
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("退出飞鸽 P2P", null, (_, _) => ExitApp()));
+        menu.Items.Add(new ToolStripMenuItem("退出数据线", null, (_, _) => ExitApp()));
         _tray.ContextMenuStrip = menu;
     }
 
@@ -1446,7 +1446,7 @@ public sealed class MainForm : Form
         Hide();
         if (_trayHintShown) return;
         _trayHintShown = true;
-        _tray.ShowBalloonTip(3000, "飞鸽 P2P 仍在后台运行",
+        _tray.ShowBalloonTip(3000, "数据线 仍在后台运行",
             "点右上角关闭只是收进托盘，仍可接收文件。要彻底退出请右键托盘图标选「退出」。", ToolTipIcon.Info);
         AppendLog("窗口已收进托盘，仍可接收文件；彻底退出请右键托盘图标选「退出」", Color.FromArgb(180, 130, 20));
     }
@@ -1732,7 +1732,7 @@ internal sealed class ReceiveConfirmDialog : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"选择保存位置失败：{ex.Message}", "飞鸽 P2P",
+            MessageBox.Show(this, $"选择保存位置失败：{ex.Message}", "数据线",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
