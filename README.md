@@ -12,8 +12,10 @@
 
 | 平台 | 文件 | 说明 |
 |---|---|---|
-| Android | `数据线.apk` | 已签名正式包，Android 7.0+ |
-| Windows | `数据线-Setup-x64.msi` | 推荐，自带 .NET 运行时，当前用户安装 |
+| Android | `dataline-2.4.0.apk` | 已签名正式包，Android 7.0+，约 11 MB |
+| Windows | `dataline-Setup-x64-2.4.0.msi` | 推荐，自带 .NET 运行时，当前用户安装，约 63 MB |
+
+> Release 附件名用 ASCII：GitHub 会把非 ASCII 字符从附件名里剥掉（`数据线.apk` 会变成 `default.apk`）。本地构建产物仍叫 `数据线.apk` / `数据线-Setup-x64.msi`，内容完全一致。
 
 > 首次安装正式包前请先卸载旧版本：debug 签名与正式签名不同，同包名无法覆盖。
 
