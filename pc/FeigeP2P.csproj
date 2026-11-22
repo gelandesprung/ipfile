@@ -9,11 +9,11 @@
     <!-- exe 在资源管理器/任务栏显示的图标 -->
     <ApplicationIcon>app.ico</ApplicationIcon>
     <!-- 安装包版本号与此保持一致 -->
-    <Version>2.1.0</Version>
-    <AssemblyTitle>飞鸽 P2P</AssemblyTitle>
-    <Product>飞鸽 P2P</Product>
-    <Company>飞鸽</Company>
-    <FileVersion>2.1.0.0</FileVersion>
+    <Version>2.4.0</Version>
+    <AssemblyTitle>数据线</AssemblyTitle>
+    <Product>数据线</Product>
+    <Company>数据线</Company>
+    <FileVersion>2.4.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>

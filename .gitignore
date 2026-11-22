@@ -9,9 +9,11 @@
 
 # Root build artifacts (本地发布产物，不入版本库)
 /FeigeP2P.exe
+/数据线.apk
 /飞书.apk
 /FeigeP2P-android.apk
 /飞鸽P2P-Setup-x64.msi
+/数据线-Setup-x64.msi
 /*.wixpdb
 /crash.log
 
@@ -24,9 +26,11 @@
 *.pyc
 *.part
 
-# Keystores / signing
+# Keystores / signing（发布证书与口令务必另行备份，绝不入库）
 *.jks
 *.keystore
+keystore.properties
+**/keystore/
 
 # WorkBuddy workspace data
 .workbuddy/

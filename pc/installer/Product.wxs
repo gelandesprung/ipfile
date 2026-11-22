@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  飞鸽 P2P 安装包（WiX v5）。
+  数据线 安装包（WiX v5）。
   构建：见同目录 build-msi.sh
   说明：采用当前用户安装（Scope="perUser"），装到 %LOCALAPPDATA%\Programs\FeigeP2P。
         不装 Program Files 的原因：程序把收到的文件存在自己目录下的 received\，
@@ -9,17 +9,17 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
 
-  <Package Name="飞鸽 P2P"
-           Manufacturer="飞鸽"
-           Version="2.1.0"
+  <Package Name="数据线"
+           Manufacturer="数据线"
+           Version="2.4.0"
            UpgradeCode="8f2c5d31-6b47-4a9e-9c85-1d2b7f0e4a63"
            Scope="perUser"
            Language="2052"
            Codepage="65001">
 
-    <SummaryInformation Description="飞鸽 P2P · 局域网互传" Manufacturer="飞鸽" />
+    <SummaryInformation Description="数据线 · 局域网互传" Manufacturer="数据线" />
 
-    <MajorUpgrade DowngradeErrorMessage="已经安装了更新版本的飞鸽 P2P，请先在「应用和功能」中卸载它。" />
+    <MajorUpgrade DowngradeErrorMessage="已经安装了更新版本的数据线，请先在「应用和功能」中卸载它。" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <!-- 控制面板「应用和功能」里的图标与说明 -->
@@ -35,12 +35,12 @@
     </StandardDirectory>
 
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="AppMenuFolder" Name="飞鸽 P2P" />
+      <Directory Id="AppMenuFolder" Name="数据线" />
     </StandardDirectory>
 
     <StandardDirectory Id="DesktopFolder" />
 
-    <Feature Id="Main" Title="飞鸽 P2P" Level="1" AllowAbsent="no">
+    <Feature Id="Main" Title="数据线" Level="1" AllowAbsent="no">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="Shortcuts" />
     </Feature>
@@ -50,7 +50,7 @@
         <File Id="FeigeExe" Source="..\..\build\payload\FeigeP2P.exe" />
         <!-- 当前用户安装：KeyPath 必须是 HKCU 注册表项，不能是文件（ICE38） -->
         <RegistryValue Root="HKCU" Key="Software\Feige\FeigeP2P" Name="Version"
-                       Type="string" Value="2.1.0" KeyPath="yes" />
+                       Type="string" Value="2.4.0" KeyPath="yes" />
       </Component>
       <!-- 收件目录先建好，用户装完立刻能收文件 -->
       <Component Id="ReceiveFolder" Guid="2B8D5A17-4C63-4E29-9F0A-7D6C1B8E3A55">
@@ -65,13 +65,13 @@
     <!-- 开始菜单 + 桌面快捷方式；卸载时清理 -->
     <Component Id="Shortcuts" Directory="AppMenuFolder" Guid="9C4E1D72-5A8F-4B36-A2D9-6E1F7B3C8D20">
       <Shortcut Id="StartMenuShortcut"
-                Name="飞鸽 P2P"
+                Name="数据线"
                 Description="局域网互传 · 扫码配对"
                 Target="[INSTALLFOLDER]FeigeP2P.exe"
                 WorkingDirectory="INSTALLFOLDER" />
       <Shortcut Id="DesktopShortcut"
                 Directory="DesktopFolder"
-                Name="飞鸽 P2P"
+                Name="数据线"
                 Description="局域网互传 · 扫码配对"
                 Target="[INSTALLFOLDER]FeigeP2P.exe"
                 WorkingDirectory="INSTALLFOLDER" />
@@ -85,7 +85,7 @@
     <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
 
     <!-- 完成后可直接启动 -->
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="立即运行飞鸽 P2P" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="立即运行数据线" />
     <CustomAction Id="LaunchApp" FileRef="FeigeExe" ExeCommand="" Return="asyncNoWait" />
     <UI>
       <!-- 只有勾选了「立即运行」才启动 -->

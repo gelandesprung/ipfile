@@ -1,8 +1,18 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+// 发布签名：口令放在 android/keystore.properties（已 gitignore），证书在 android/keystore/ 下
+val signingPropsFile = rootProject.file("keystore.properties")
+val signingProps = Properties().apply {
+    if (signingPropsFile.exists()) FileInputStream(signingPropsFile).use { load(it) }
+}
+val hasSigning = signingPropsFile.exists()
 
 android {
     namespace = "com.gelandesprung.ipfile"
@@ -12,14 +22,27 @@ android {
         applicationId = "com.gelandesprung.ipfile"
         minSdk = 24
         targetSdk = 35
-        versionCode = 7
-        versionName = "2.0"
+        versionCode = 9
+        versionName = "2.4"
+    }
+
+    signingConfigs {
+        create("release") {
+            if (hasSigning) {
+                storeFile = rootProject.file(signingProps.getProperty("storeFile"))
+                storePassword = signingProps.getProperty("storePassword")
+                keyAlias = signingProps.getProperty("keyAlias")
+                keyPassword = signingProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // 没有签名文件时也能构建（例如 CI 里只做编译检查），有则用正式证书
+            signingConfig = if (hasSigning) signingConfigs.getByName("release") else null
         }
     }
 

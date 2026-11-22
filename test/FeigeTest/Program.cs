@@ -83,7 +83,7 @@ void Check(string name, bool ok, string detail = "")
     }
 }
 
-Console.WriteLine("========== 飞鸽 P2P v2.0 协议与配对测试 ==========\n");
+Console.WriteLine("========== 数据线 v2.4 协议与配对测试 ==========\n");
 
 // ---------- 1. 二维码 / 配对编解码 ----------
 Console.WriteLine("[1] 二维码与配对握手编解码");
@@ -329,7 +329,7 @@ using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
 var baseUrl = $"http://127.0.0.1:{web.Port}/";
 
 var page = await http.GetStringAsync(baseUrl);
-Check("访客页可直接打开（零安装）", page.Contains("加入飞鸽") && page.Contains("/api/join"), $"{page.Length} 字节");
+Check("访客页可直接打开（零安装）", page.Contains("加入数据线") && page.Contains("/api/join"), $"{page.Length} 字节");
 Check("页面自包含、不依赖外部资源", !page.Contains("{{") && !page.Contains("cdn.") && !page.Contains("<script src"));
 
 var badJoin = await PostJson(http, baseUrl + "api/join", new { nickname = "小美", pin = "000000" });
@@ -459,7 +459,7 @@ Check("默认启动（不传端口）即随机端口",
     autoStart.Ok && web.Port >= WebHostService.RandomPortMin && web.Port <= WebHostService.RandomPortMax,
     autoStart.Message);
 var autoPage = await http.GetStringAsync($"http://127.0.0.1:{web.Port}/");
-Check("随机端口上的访客页可正常打开", autoPage.Contains("加入飞鸽"), $"{autoPage.Length} 字节");
+Check("随机端口上的访客页可正常打开", autoPage.Contains("加入数据线"), $"{autoPage.Length} 字节");
 
 var firstPort = web.Port;
 web.Stop();

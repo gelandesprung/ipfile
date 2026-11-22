@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 生成 PC 端安装包：飞鸽P2P-Setup-x64.msi
+# 生成 PC 端安装包：数据线-Setup-x64.msi
 #
 # 前置：
 #   1) .NET 8 SDK（本机在 tools/dotnet-sdk-8.0.428-win-x64）
@@ -7,7 +7,7 @@
 #        dotnet tool install --global wix --version 5.0.2
 #        wix extension add -g WixToolset.UI.wixext/5.0.2
 #
-# 产物：仓库根目录 飞鸽P2P-Setup-x64.msi
+# 产物：仓库根目录 数据线-Setup-x64.msi
 # 说明：payload 是「自包含单文件」exe（约 72MB），安装后无需另装 .NET 运行时。
 set -euo pipefail
 
@@ -15,7 +15,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DOTNET_ROOT="${DOTNET_ROOT:-$ROOT/../todo/tools/dotnet-sdk-8.0.428-win-x64}"
 DOTNET="$DOTNET_ROOT/dotnet.exe"
 PAYLOAD="$ROOT/build/payload"
-OUT="$ROOT/飞鸽P2P-Setup-x64.msi"
+OUT="$ROOT/数据线-Setup-x64.msi"
 
 echo "==> 发布自包含单文件 exe"
 rm -rf "$PAYLOAD"

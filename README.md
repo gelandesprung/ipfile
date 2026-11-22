@@ -1,10 +1,21 @@
-# 飞鸽 P2P · 局域网互传
+# 数据线 · 局域网互传
 
 一个纯点对点（P2P）的局域网文件传输工具，灵感来自 2005 年前后的「飞鸽传书」。PC（Windows）与 Android 手机安装本应用后，**同一网段会自动互相发现**；跨网段或用扫码**二维码配对**建立连接，之后直接互传文件，**不经过任何服务器、不加密**。支持 1GB 以内文件。
 
 - **PC 端**：C# + WinForms，.NET 8，独立 exe
 - **Android 端**：Kotlin + Jetpack Compose，minSdk 24（Android 7.0+）
 - **通信**：UDP 广播自动发现 + 二维码配对（10 分钟有效、双向确认）+ TCP 点对点传输（TCP/UDP 端口 2425，IPv6/IPv4 双栈），协议见 [`shared/PROTOCOL.md`](shared/PROTOCOL.md)
+
+## 下载
+
+源码仓库：[gelandesprung/ipfile](https://github.com/gelandesprung/ipfile)　·　安装包见 [Releases](https://github.com/gelandesprung/ipfile/releases/latest)
+
+| 平台 | 文件 | 说明 |
+|---|---|---|
+| Android | `数据线.apk` | 已签名正式包，Android 7.0+ |
+| Windows | `数据线-Setup-x64.msi` | 推荐，自带 .NET 运行时，当前用户安装 |
+
+> 首次安装正式包前请先卸载旧版本：debug 签名与正式签名不同，同包名无法覆盖。
 
 ---
 
@@ -35,11 +46,11 @@
 
 ### 网页模式（PC + Android，v2.2 新增）
 
-给**没装飞鸽的朋友**一个浏览器入口：主界面点「🌐 网页模式」→ 服务启动 → 出示地址 + 二维码 + 6 位 PIN → 朋友用手机/电脑浏览器打开，输入昵称和 PIN 加入，即可双向传文件。零安装、不经过任何服务器。
+给**没装数据线的朋友**一个浏览器入口：主界面点「🌐 网页模式」→ 服务启动 → 出示地址 + 二维码 + 6 位 PIN → 朋友用手机/电脑浏览器打开，输入昵称和 PIN 加入，即可双向传文件。零安装、不经过任何服务器。
 
 - **入口与配对并列**：「＋ 扫码添加设备」给装了 App 的设备，「🌐 网页模式」给浏览器；配对流程一行未改
 - **一次点击、三处联动**：地址文字 / 二维码 / 服务状态；PIN 与在线访客不受影响
-- **IPv4 / IPv6 可切换**：默认 IPv4；本机没有可用 IPv6 时整个选项禁用，绝不显示对方连不上的地址
+- **IPv4 / IPv6 可切换**：默认 IPv6；本机没有可用 IPv6 时自动回退 IPv4，绝不显示对方连不上的地址
 - **访客独立成页**：浏览器访客不进 P2P 设备列表（两者是不同的传输通道），只在网页模式窗口里管理
 - **两层确认不变**：加入要 PIN；你发文件给访客→访客确认；访客上传→你确认（复用原接收框与「选保存位置」，Android 端才自动落默认目录）
 - **群发**：勾选多位访客 + 选文件 → 逐人发 offer、各自 60 秒确认、独立传输，一人拒绝不影响他人
@@ -49,7 +60,7 @@
 
 > 实现说明：信令用 **SSE（EventSource）** 而不是 WebSocket——语义相同（服务端单向推送 + 自动重连），但省掉一层帧编解码；文件本体仍走普通 HTTP（下载流式返回、上传流式落盘后再发布），大文件不进内存。
 >
-> 两端实现同一套接口：PC 用自写的 `TcpListener` HTTP 服务（免提权），Android 用 `ServerSocket`（先绑 `::` 走双栈，再退回 IPv4）；访客页 HTML 只有一份，位于 `shared/web/guest.html`，PC 编成嵌入资源、Android 打进 assets。落盘各自贴合平台：**PC 弹「选保存位置」，Android 直接进 `Download/飞鸽收件/`**，后者用 MediaStore 的 `IS_PENDING` 充当 `.part`（收齐才发布，中途失败直接删行，不留残缺文件）。
+> 两端实现同一套接口：PC 用自写的 `TcpListener` HTTP 服务（免提权），Android 用 `ServerSocket`（先绑 `::` 走双栈，再退回 IPv4）；访客页 HTML 只有一份，位于 `shared/web/guest.html`，PC 编成嵌入资源、Android 打进 assets。落盘各自贴合平台：**PC 弹「选保存位置」，Android 直接进 `Download/数据线收件/`**，后者用 MediaStore 的 `IS_PENDING` 充当 `.part`（收齐才发布，中途失败直接删行，不留残缺文件）。
 
 ---
 
@@ -87,9 +98,9 @@
 
 | 文件 | 说明 |
 |---|---|
-| `飞鸽P2P-Setup-x64.msi` | **PC 安装包**（推荐），约 63 MB，双击安装，自带 .NET 运行时，装完有开始菜单/桌面快捷方式与卸载入口 |
+| `数据线-Setup-x64.msi` | **PC 安装包**（推荐），约 63 MB，双击安装，自带 .NET 运行时，装完有开始菜单/桌面快捷方式与卸载入口 |
 | `FeigeP2P.exe` | PC 绿色版单文件，约 670 KB，免安装直接跑（需 .NET 8 桌面运行时） |
-| `飞书.apk` | Android 安装包，约 17 MB，支持 Android 7.0+；装好后在手机上显示为「飞书」 |
+| `数据线.apk` | Android 正式安装包（已签名），支持 Android 7.0+；装好后在手机上显示为「数据线」 |
 
 两端图标一致：蓝色圆底 + 白色「飞」，字形取自微软雅黑粗体的真实轮廓。PC 的 `pc/app.ico` 与 Android 的 `ic_launcher_foreground.xml` 都由 `tools/icongen` 从同一份轮廓生成，改颜色或大小可重新跑一遍：
 
@@ -98,36 +109,46 @@ cd tools/icongen
 dotnet run -c Release -- ../../pc/app.ico ../pathdata.txt   # 换 logo 色只需改 IconGen.Blue
 ```
 
-Android 端安装后名称为「飞书」，包名仍是 `com.gelandesprung.ipfile`。
+Android 端安装后名称为「数据线」，包名仍是 `com.gelandesprung.ipfile`（升级不受影响，签名变更后首次安装需先卸载旧版）。
 
 以上产物都由构建脚本生成，已加入 `.gitignore`（二进制不进版本库）。
 
-> 根目录现存的这三个文件是 v2.1 时期打包的，**不含 v2.2 网页模式**；要用新功能请按下面的命令重新生成（`<Version>` 与 MSI 的 `Product.wxs` 也需同步升到 2.2.0）。
+> 根目录这两个安装包由 tag `v2.4.0` 的代码构建（Android `versionCode 9 / versionName 2.4`，PC `2.4.0`），并已作为该 Release 的附件上传。改完代码请按下面的命令重新生成（`<Version>` 与 MSI 的 `Product.wxs` 需同步到 2.4.0）。
 
 重新生成：
 
 ```bash
-# PC 安装包 → 根目录 飞鸽P2P-Setup-x64.msi（一条命令搞定，见下节）
+# PC 安装包 → 根目录 数据线-Setup-x64.msi（一条命令搞定，见下节）
 bash pc/installer/build-msi.sh
 
 # PC 绿色版 → 根目录单文件（需目标机器有 .NET 8 桌面运行时）
 dotnet publish pc/FeigeP2P.csproj -c Release -r win-x64 \
   --self-contained false -p:PublishSingleFile=true -p:DebugType=none -o .
 
-# Android 端 → 复制到根目录
-cd android && ./gradlew assembleDebug
-cp app/build/outputs/apk/debug/app-debug.apk ../飞书.apk
+# Android 正式包（已签名，需要 android/keystore.properties）→ 复制到根目录
+cd android && ./gradlew assembleRelease
+cp app/build/outputs/apk/release/app-release.apk ../数据线.apk
 ```
+
+### Android 签名与正式包
+
+发布用的自签名证书放在 `android/keystore/dataline-release.jks`（PKCS12，RSA 4096，有效期 10000 天），口令在 `android/keystore.properties`，两者都已在 `.gitignore` 里，**不会进版本库，请另外离线备份**——证书丢了就无法再发布覆盖升级。
+
+- `android/app/build.gradle.kts` 会自动读取 `keystore.properties` 给 release 签名；文件不存在时 release 仍能编译（不签名），方便纯编译检查
+- 构建：`cd android && ./gradlew assembleRelease` → `app/build/outputs/apk/release/app-release.apk`
+- 校验：`apksigner verify --print-certs app-release.apk`，证书 SHA-256 应为 `DD:39:E9:06:…:B4:0E`
+- **首次装正式包要先卸载旧版**：debug 签名与正式签名不同，同包名不同签名无法覆盖安装；之后升版本可正常覆盖
+- 证书指纹变了就意味着换了签名，应用市场/系统会拒绝升级，务必保留当前这一套
 
 ### PC 安装包（MSI）
 
-双击 `飞鸽P2P-Setup-x64.msi` 即可：中文向导 → 许可 → 选择目录 → 安装 → 可勾选「立即运行飞鸽 P2P」。
+双击 `数据线-Setup-x64.msi` 即可：中文向导 → 许可 → 选择目录 → 安装 → 可勾选「立即运行数据线」。
 
 - **当前用户安装**，默认装到 `%LOCALAPPDATA%\Programs\FeigeP2P`，**不需要管理员权限**
 - 不装进 `Program Files` 是刻意的：程序把收到的文件存在安装目录的 `received\` 下，装进受保护目录后非管理员运行将无法写入
 - 装完自动创建开始菜单与桌面快捷方式；在「设置 → 应用 → 已安装的应用」里可卸载
 - 包内是**自包含单文件**，目标机器无需安装 .NET 8 运行时
-- 版本号 2.1.0，与 `pc/FeigeP2P.csproj` 的 `<Version>` 一致；升级时新包会自动替换旧版（MajorUpgrade）
+- 版本号 2.4.0，与 `pc/FeigeP2P.csproj` 的 `<Version>` 一致；升级时新包会自动替换旧版（MajorUpgrade）
 
 打包工具是 WiX v5（.NET 全局工具，一次安装）：
 
@@ -164,7 +185,7 @@ dotnet build -c Release
   - 在选择框里点取消不算拒绝，会退回确认框继续等
   - 点「拒绝」则不接收，并**立刻通知对方被拒绝**；60 秒不操作也会自动拒绝
 - **最近传输**：右上区域最多显示 5 条收/发记录（`↓` 收、`↑` 发），**点一下**就在资源管理器中选中该文件；文件已被移走时改为打开其所在目录
-- **关闭窗口 = 收进托盘**：程序继续在后台接收文件，双击托盘图标可恢复窗口；**真正退出**请右键托盘图标 → 「退出飞鸽 P2P」
+- **关闭窗口 = 收进托盘**：程序继续在后台接收文件，双击托盘图标可恢复窗口；**真正退出**请右键托盘图标 → 「退出数据线」
 - **改设备名**：点顶部自己的名字 → 变成输入框 → 回车保存
 - **复制 IP**：右键设备 → 「复制 IP 地址」
 - **刷新设备**：右键设备（或列表空白处）→ 「刷新设备」，立即重发一次广播，不用等下一轮
@@ -214,17 +235,17 @@ gradle -p android assembleDebug
   - App 在前台：弹「收到文件」对话框，点「接收」或「拒绝」
   - App 在后台/锁屏：通知栏出现带「接收 / 拒绝」按钮的高优先级通知
   - 拒绝会立刻通知对方；60 秒未选择按拒绝处理
-  - 同意后保存到公共下载目录 `飞鸽收件/`，通知栏显示进度
+  - 同意后保存到公共下载目录 `数据线收件/`，通知栏显示进度
 - **打开收到的文件**：在「最近传输」里点任意一条记录，用系统默认应用打开（发出的记录也可点开原文件）
 - **改设备名**：右上角「设置」→ 第 1 项「设备名」→ 保存
 - **网页模式（让没装 App 的朋友用浏览器收发）**：
   - 主界面点「🌐 网页模式」（与「添加设备」并列），进页面即启动服务并生成 PIN；入口带小绿点表示正在对外服务
-  - 页内有访问地址（可复制）、二维码、6 位 PIN；手机同时有 IPv4/IPv6 时可切换地址族（默认 IPv4，切换不影响 PIN 与已在线访客）
+  - 页内有访问地址（可复制）、二维码、6 位 PIN；手机同时有 IPv4/IPv6 时可切换地址族（默认 IPv6，切换不影响 PIN 与已在线访客）
   - 朋友连同一 Wi-Fi/热点 → 扫码或照页内地址手输 `http://手机IP:随机端口/` → 填昵称 + PIN 加入
   - **发文件**：长按访客 →「发送文件…」（可多选）；或点「群发」勾选多人后一次发
-  - **收文件**：访客上传时弹确认框（后台则走通知栏「接收 / 拒绝」），同意后自动存到 `Download/飞鸽收件/`
+  - **收文件**：访客上传时弹确认框（后台则走通知栏「接收 / 拒绝」），同意后自动存到 `Download/数据线收件/`
   - 退出这个页面服务仍在跑；要停就点右上角「停止服务」。端口每次启动随机（20000–61000），被占用会自动避让，日志与页内地址始终显示实际端口
-  - 手机锁屏仍可收发，但系统深度休眠时可能被冻结，建议把飞鸽加入电池优化白名单
+  - 手机锁屏仍可收发，但系统深度休眠时可能被冻结，建议把数据线加入电池优化白名单
 - **服务**：设置页可手动启动/停止接收服务；正常情况下打开 App 会自动启动
 
 > 注意：Android 10+ 后台限制较严，若要长时间离开 App 也能收文件，请保持接收服务的前台通知常驻（不要划掉通知），并允许电池优化白名单。
@@ -283,9 +304,23 @@ dotnet run
 
 ## 更新记录
 
+### v2.4 · 扫码配对界面重做、两端统一改名数据线
+
+- **扫码页重写**：`ScannerView.kt` 用页内 `BarcodeView` 承载预览与连续解码，Compose 画压暗遮罩、四角框、扫描线（扫错时四角转红）；相机权限被拒有专门说明卡与「从相册选择 / 去设置」两个出口；横屏自动切成左右分栏
+- **扫到码之后**：`AlertDialog` 换成 `ModalBottomSheet`，可核对设备名与地址；等待对方允许时按钮转圈，失败留在卡上说明并「重新扫描」
+- **PC 端改名**：窗口标题、托盘、对话框、安装包与快捷方式统一为「数据线」，`数据线-Setup-x64.msi`
+- 版本：Android `versionCode 9 / versionName 2.4`，PC `2.4.0`
+- 发布：tag [`v2.4.0`](https://github.com/gelandesprung/ipfile/releases/tag/v2.4.0)，附件 `数据线.apk`、`数据线-Setup-x64.msi`
+
+### v2.3 · 改名数据线 / 默认 IPv6 / 正式签名
+
+- **应用更名**：两端统一为「数据线」——Android 的桌面名、标题栏、通知、关于页，PC 的窗口标题、托盘菜单、安装包与快捷方式全部改掉；安装包文件名改为 `数据线-Setup-x64.msi`。包名仍为 `com.gelandesprung.ipfile`，接收目录改为 `Download/数据线收件/`
+- **网页模式默认 IPv6**（PC + Android）：有全局 IPv6 时默认用它出示地址与二维码；没有可用 IPv6 时自动回退 IPv4，不会显示对方连不上的地址。分段控件与手动切换保持不变
+- **正式签名链路**：新增 PKCS12 发布证书（RSA 4096 / 10000 天）与 `keystore.properties`，release 构建自动签名；`versionCode 8 / versionName 2.3`，产物 `数据线.apk`
+
 ### v2.2 · 浏览器网页模式（2026-11）
 
-给没装飞鸽的朋友一个浏览器入口，PC 与 Android 同步实现：
+给没装数据线的朋友一个浏览器入口，PC 与 Android 同步实现：
 
 - **入口**：主界面「🌐 网页模式」与「＋ 扫码添加设备」并列；点开即启动 HTTP 服务，出示访问地址、二维码与 6 位 PIN
 - **访客零安装**：浏览器填昵称 + PIN 加入；Host 可定向发文件，也可勾选多人群发，访客还能反向上传（Host 先确认才收）
